@@ -1,0 +1,8 @@
+# Normalise to LF in the repository regardless of the platform that commits.
+#
+# This is written down rather than left to autocrlf because the sibling projects in this family have
+# already been bitten: shipped text that is CRLF in the working tree breaks shell scripts and diffs on
+# POSIX, and the discovery happens on somebody else's machine. A CI job on three platforms makes that
+# mistake expensive; one line here makes it impossible.
+* text=auto eol=lf
+*.png binary
