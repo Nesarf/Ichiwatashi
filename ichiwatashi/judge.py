@@ -19,6 +19,8 @@ from dataclasses import dataclass, field
 from math import gcd
 from functools import reduce
 
+from . import calibration
+
 __all__ = ["Report", "judge", "load_rgba"]
 
 
@@ -223,29 +225,34 @@ def judge(image) -> Report:
     n = max(1, len(coords))
     median_cluster = sorted(sizes)[len(sizes) // 2] if sizes else 0
     notes = []
-    if len(coords) == 0:
+
+    if not coords:
         notes.append("the image is fully transparent")
-    # **A raw rate threshold here raises a false positive on known-good art**, which is why this
-    # looks at two numbers instead of one. Pointed at a real 72x113 fighting-game frame -- 21 colours,
-    # 546 clusters -- isolated pixels were 10.1%, and that is detail (single-pixel highlights, eyes,
-    # cloth texture), not noise. What separates noise from detail is the company it keeps: noise comes
-    # with few large clusters, detail comes with many. So the note needs a high rate *and* a low
-    # cluster count, and a hand attempt at 15.4% with 100 clusters in a 32x32 is the case it is for.
-    median_cluster = sorted(sizes)[len(sizes) // 2] if sizes else 0
-    if iso and iso / n > 0.05 and median_cluster > 4:
-        notes.append("isolated pixels are %.1f%% of the sprite and its colour clusters are large "
-                     "(median %d pixels) -- that combination is stray single pixels or a "
-                     "procedural pattern rather than detail"
-                     % (100 * iso / n, median_cluster))
-    if var < 0.1 and nborder > 20:
-        notes.append("the outline is almost one flat colour (variation %.2f); known-good sprites "
-                     "vary it with the local colour" % var)
-    if sizes and sizes[0] / n > 0.5:
-        notes.append("one colour covers %.0f%% of the sprite; the silhouette is probably a block"
-                     % (100 * sizes[0] / n))
-    if fill > 0.7:
-        notes.append("the bounding box is %.0f%% full; a readable silhouette usually leaves more "
-                     "empty corner" % (100 * fill))
+    else:
+        # Thresholds come from `calibration`, which holds measured percentiles from 120 real sprites.
+        # They used to be chosen by feel, and one of them was wrong by a factor of two: "isolated
+        # pixels above 5%" sat *below the fifth percentile* of known-good art and fired on nearly
+        # every real sprite. **A report that fires on good work is a report that gets ignored.**
+        for metric, value in (("isolated_rate", iso / n),
+                              ("bbox_fill", fill),
+                              ("largest_cluster_rate", (sizes[0] if sizes else 0) / n),
+                              ("palette_size", len(colours))):
+            msg = calibration.outside(metric, value)
+            if msg:
+                notes.append(msg)
+
+        # Two rules that are not percentile-based, because the reference sample cannot express them:
+        # a flat outline is a shape of the distribution rather than an outlying value, and the
+        # combination of a high isolated rate with large clusters is what noise looks like -- detail
+        # has the same rate but comes with many small clusters.
+        if var < 0.3 and nborder > 20:
+            notes.append("the outline is nearly one flat colour (variation %.2f against a reference "
+                         "median of %.2f); known-good sprites vary it with the local colour"
+                         % (var, calibration.REFERENCE["outline_variation"].median))
+        if iso and iso / n > 0.05 and median_cluster > 4:
+            notes.append("isolated pixels are %.1f%% and the colour clusters are large (median %d "
+                         "pixels) -- that combination is stray single pixels or a procedural pattern "
+                         "rather than detail" % (100 * iso / n, median_cluster))
 
     return Report(
         width=w, height=h, opaque=len(coords),

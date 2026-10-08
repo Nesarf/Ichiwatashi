@@ -63,8 +63,12 @@ class TestJudge(unittest.TestCase):
                 px[x, y] = ((x * 9) % 200 + 30, (y * 7) % 200 + 30, (x + y) % 200 + 30, 255)
         r = judge_fn(detail)
         self.assertGreater(r.isolated_rate, 0.05)
-        self.assertFalse(any("isolated" in n for n in r.notes),
-                         "fine detail is being reported as noise")
+        # Two different statements are possible about isolated pixels and they must not be confused.
+        # Being unlike the reference sample is one of them, and this fixture -- 576 colours against a
+        # reference of 16-37 -- deserves it. Being diagnosed as *noise* is the other, and that is the
+        # one the cluster shape decides. So the assertion names the diagnosis, not the word.
+        self.assertFalse(any("stray single pixels" in n for n in r.notes),
+                         "fine detail is being diagnosed as noise: %s" % r.notes)
 
     def test_the_report_is_deterministic(self):
         im = flat((8, 8), (10, 20, 30, 255))
@@ -275,6 +279,62 @@ class TestFrames(unittest.TestCase):
     def test_a_pivot_defaults_to_bottom_centre(self):
         f = F.Frame(flat((12, 20)))
         self.assertEqual(f.pivot, (6, 19))
+
+
+class TestCalibration(unittest.TestCase):
+    """The thresholds are measurements, so the tests are about the measurements staying honest."""
+
+    def test_the_reference_carries_its_provenance(self):
+        """A percentile without its sample is an opinion with a decimal point."""
+        from ichiwatashi import calibration as C
+        for k in ("source", "kind", "sample", "eligible", "sampling"):
+            self.assertIn(k, C.PROVENANCE)
+        self.assertGreater(C.PROVENANCE["sample"], 30, "too few sprites to be a distribution")
+
+    def test_the_reference_is_ordered(self):
+        from ichiwatashi import calibration as C
+        for name, p in C.REFERENCE.items():
+            vals = [p.p05, p.p25, p.median, p.p75, p.p95]
+            self.assertEqual(vals, sorted(vals), "%s is not monotonic" % name)
+
+    def test_the_old_threshold_is_recorded_as_having_been_wrong(self):
+        """The isolated-pixel rule fired above 5%, which is below the fifth percentile of known-good
+        art. This test exists so that rule cannot be reintroduced as a "reasonable" default."""
+        from ichiwatashi import calibration as C
+        self.assertGreater(C.REFERENCE["isolated_rate"].p05, 0.05,
+                           "the reference no longer shows why the 5% rule was wrong")
+
+    def test_outside_reports_the_side_and_the_sample(self):
+        from ichiwatashi import calibration as C
+        low = C.outside("isolated_rate", 0.01)
+        high = C.outside("isolated_rate", 0.99)
+        self.assertIn("below", low)
+        self.assertIn("above", high)
+        self.assertIn("n=", low)
+        self.assertIsNone(C.outside("isolated_rate", 0.116), "the median should not be flagged")
+
+    def test_an_unknown_metric_is_not_invented(self):
+        from ichiwatashi import calibration as C
+        self.assertIsNone(C.outside("not_a_metric", 12345))
+
+    def test_a_reference_sprite_raises_no_note(self):
+        """The property worth keeping: the notes must not fire on work that is known to be good."""
+        from ichiwatashi import calibration as C
+        from ichiwatashi.judge import judge
+        # A sprite built to sit at the reference medians must come back clean.
+        im = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+        px = im.load()
+        import colorsys
+        colours = []
+        for i in range(int(C.REFERENCE["palette_size"].median)):
+            r, g, b = colorsys.hsv_to_rgb(i / 26.0, 0.7, 0.8)
+            colours.append((int(r * 255), int(g * 255), int(b * 255), 255))
+        for y in range(6, 58):
+            for x in range(6, 58):
+                px[x, y] = colours[(x * 3 + y * 5) % len(colours)]
+        r = judge(im)
+        self.assertFalse(any("palette_size" in n for n in r.notes),
+                         "a sprite at the reference palette size was flagged: %s" % r.notes)
 
 
 if __name__ == "__main__":

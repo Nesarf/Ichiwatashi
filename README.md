@@ -23,6 +23,36 @@ falsified two of its own assumptions immediately:**
 a known-good sample to point at. That is the whole argument for this repository existing as a
 measuring tool first.
 
+### And then the thresholds were measured rather than chosen
+
+One known-good sprite falsifies an obviously wrong rule. It cannot set a threshold — so the judge was
+pointed at **120 real sprites** (8bpp character frames from `th123a.dat`, 24–128 px, seeded sample from
+3853 eligible). The distributions live in `ichiwatashi/calibration.py` with their provenance:
+
+| metric | p05 | p25 | median | p75 | p95 |
+|---|---|---|---|---|---|
+| `palette_size` | 16 | 22 | **26** | 31 | 37 |
+| `isolated_rate` | 0.074 | 0.099 | **0.116** | 0.134 | 0.160 |
+| `outline_variation` | 0.578 | 0.658 | **0.726** | 0.801 | 0.855 |
+| `bbox_fill` | 0.345 | 0.458 | **0.538** | 0.589 | 0.652 |
+| `largest_cluster_rate` | 0.039 | 0.063 | **0.090** | 0.136 | 0.228 |
+
+**Only 1 of the 120 raises any note now**, which is the property worth keeping: a report that fires on
+good work is a report that gets ignored.
+
+Two things fell out of the distribution that a single sample could not have shown:
+
+- **The old isolated-pixel rule fired above 5%, which is below the fifth percentile of real sprites.**
+  Real art sits at 7.4–16%. Both of the 32×32 attempts were wrong in *opposite* directions — one at
+  15.4% (fragmented) and one at 1.35% (too coherent, and flagged by a high bounding-box fill instead).
+  **A "lower is better" rule can only ever see one of those two failures.**
+- **Real sprites use 26 colours at the median.** Both attempts used 10 and 12, which is a real gap and
+  now gets said out loud.
+
+Notes are phrased as *unlike the reference* rather than *wrong*, and the range used is p05–p95 — so by
+construction about one good sprite in ten sits outside it. That rate is deliberate: it keeps the note
+meaning something.
+
 ---
 
 ## Install
