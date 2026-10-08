@@ -233,13 +233,19 @@ def judge(image) -> Report:
         # They used to be chosen by feel, and one of them was wrong by a factor of two: "isolated
         # pixels above 5%" sat *below the fifth percentile* of known-good art and fired on nearly
         # every real sprite. **A report that fires on good work is a report that gets ignored.**
+        # At most the two furthest-out metrics. Even with the margin, listing every qualifying one
+        # turns the report into a wall of text that gets skimmed, and the point of the margin was to
+        # make a note mean something.
+        found = []
         for metric, value in (("isolated_rate", iso / n),
                               ("bbox_fill", fill),
                               ("largest_cluster_rate", (sizes[0] if sizes else 0) / n),
                               ("palette_size", len(colours))):
             msg = calibration.outside(metric, value)
             if msg:
-                notes.append(msg)
+                found.append((calibration.how_far(metric, value), msg))
+        found.sort(reverse=True)
+        notes.extend(m for _, m in found[:2])
 
         # Two rules that are not percentile-based, because the reference sample cannot express them:
         # a flat outline is a shape of the distribution rather than an outlying value, and the

@@ -70,21 +70,45 @@ REFERENCE = {
 }
 
 
-def outside(metric: str, value: float, *, low: bool = True, high: bool = True):
+def outside(metric: str, value: float, *, margin: float = 0.5):
     """Return a sentence naming which side of the reference range a value fell, or None.
 
-    The range used is p05 to p95, so by construction about one sprite in ten of the reference sample
-    would sit outside it. That is deliberate: **a note should mean "this is unlike the reference" and
-    not "this is wrong"**, and roughly one in ten is the rate at which the former stays useful.
+    **The range is not p05-p95, and that is the correction this function carries.** With four metrics
+    each flagged about one time in ten, a sprite that is outside on *any* of them is flagged
+    `1 - 0.9**4`, about a third of the time -- and running the calibration script over 120 real
+    sprites measured exactly that: 42 of them, 35%. **A third of good work raising a note is the same
+    failure as the 5% isolated-pixel rule, just distributed.** So the note now needs the value to be
+    `margin` of a full range *beyond* p05 or p95, which makes each metric fire on a small percent and
+    keeps "flagged" meaning something when it appears.
+
+    `margin=0.5` is a judgement and not a measurement -- what is measured is the false-positive rate
+    it produces, which `tools/calibrate.py` reports. Change the margin and re-run that.
     """
     ref = REFERENCE.get(metric)
     if ref is None:
         return None
-    if low and value < ref.p05:
-        return "%s is %.3f, below the reference range %.3f-%.3f (%s, n=%d)" % (
-            metric, value, ref.p05, ref.p95, PROVENANCE["source"].split(" (")[0],
-            PROVENANCE["sample"])
-    if high and value > ref.p95:
-        return "%s is %.3f, above the reference range %.3f-%.3f" % (
-            metric, value, ref.p05, ref.p95)
+    spread = max(1e-9, ref.p95 - ref.p05)
+    lo = ref.p05 - margin * spread
+    hi = ref.p95 + margin * spread
+    if value < lo:
+        return ("%s is %.3f, well below the reference range %.3f-%.3f (%s, n=%d)"
+                % (metric, value, ref.p05, ref.p95,
+                   PROVENANCE["source"].split(" (")[0], PROVENANCE["sample"]))
+    if value > hi:
+        return ("%s is %.3f, well above the reference range %.3f-%.3f (%s, n=%d)"
+                % (metric, value, ref.p05, ref.p95,
+                   PROVENANCE["source"].split(" (")[0], PROVENANCE["sample"]))
     return None
+
+
+def how_far(metric: str, value: float):
+    """How many reference ranges a value sits outside its range, signed. Used only for ordering."""
+    ref = REFERENCE.get(metric)
+    if ref is None:
+        return 0.0
+    spread = max(1e-9, ref.p95 - ref.p05)
+    if value < ref.p05:
+        return (ref.p05 - value) / spread
+    if value > ref.p95:
+        return (value - ref.p95) / spread
+    return 0.0
