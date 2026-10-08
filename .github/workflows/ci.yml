@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ["3.9", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install "Pillow>=9"
+      # No install of the package itself: the suite imports it from the checkout, so what is tested is
+      # the tree and not an installed copy of it.
+      - run: python -m unittest discover -s test -t . -v
+
+  cli:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install "Pillow>=9"
+      - name: The CLI runs and reports
+        run: |
+          python - <<'PY'
+          from PIL import Image
+          im = Image.new("RGBA", (16, 16), (0, 0, 0, 0))
+          for y in range(4, 12):
+              for x in range(4, 12):
+                  im.putpixel((x, y), (200, 100, 100, 255))
+          im.save("sample.png")
+          PY
+          python -m ichiwatashi.cli judge sample.png
+          python -m ichiwatashi.cli judge sample.png --fail-on-note || true

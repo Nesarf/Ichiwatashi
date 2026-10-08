@@ -1,0 +1,26 @@
+[project]
+name = "ichiwatashi"
+version = "0.1.0"
+description = "Deterministic pixel-art measurement and parametric construction"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+keywords = ["pixel-art", "sprite", "animation", "spritesheet", "measurement"]
+# Pillow is required rather than optional: this is a tool that reads and writes images, and an
+# install that cannot open a PNG is not a degraded install, it is a broken one.
+dependencies = ["Pillow>=9"]
+
+[project.scripts]
+ichiwatashi = "ichiwatashi.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/Nesarf/Ichiwatashi"
+Repository = "https://github.com/Nesarf/Ichiwatashi"
+Issues = "https://github.com/Nesarf/Ichiwatashi/issues"
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["ichiwatashi"]
