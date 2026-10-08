@@ -49,6 +49,37 @@ Two things fell out of the distribution that a single sample could not have show
 - **Real sprites use 26 colours at the median.** Both attempts used 10 and 12, which is a real gap and
   now gets said out loud.
 
+### And a third corpus showed the metrics measure a convention as well as art
+
+The judge was pointed at 40 frames of a pixel-art animation from a different artist and a different
+decade. Raw, they measured `bbox_fill` **1.000** and `outline_variation` **0.000** — raising "the
+silhouette is a block" and "the outline is flat" — and **40 of 40 were flagged.**
+
+Both notes were false, and for a reason the tool had no way to see: those frames are **opaque and fill
+their canvas**, with the subject on a background rather than on transparency. `bbox_fill` and
+`outline_variation` cannot be measured on such an image at all — they read 1.000 and 0.000 whatever is
+drawn. After the background was made transparent and each frame cropped to its subject, the same
+frames measured **0.642** and **0.564**, both inside the reference range.
+
+So `judge` now recognises a rendered frame and says so, instead of producing two confident notes about
+the export rather than the drawing. That is the same failure as the 5% threshold and the 35% flag rate:
+**a report that fires on good work gets ignored, and the way to find these is to point the tool at work
+that is already known to be good.**
+
+With the convention matched, the two corpora can be compared at all:
+
+| metric | TH123 (n=120) | animated pixel art (n=40) |
+|---|---|---|
+| `isolated_rate` | 0.116 (0.074–0.160) | **0.057 (0.036–0.078)** |
+| `outline_variation` | 0.726 (0.578–0.855) | 0.564 (0.245–0.703) |
+| `bbox_fill` | 0.538 (0.345–0.652) | **0.642 (0.613–0.685)** |
+| `largest_cluster_rate` | 0.090 (0.039–0.228) | 0.149 (0.060–0.191) |
+
+Two differences survive, and one row is deliberately missing: `palette_size` was **forced to 16** when
+the second corpus was reconstructed from a lossy source, so that number is the reconstruction's and not
+the artist's. **A metric that a processing step sets is not evidence about the art**, which is the same
+distinction the merging sampler exists to make.
+
 Notes are phrased as *unlike the reference* rather than *wrong*, and the range used is p05–p95 — so by
 construction about one good sprite in ten sits outside it. That rate is deliberate: it keeps the note
 meaning something.

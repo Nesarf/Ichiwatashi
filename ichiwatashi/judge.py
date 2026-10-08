@@ -226,8 +226,25 @@ def judge(image) -> Report:
     median_cluster = sorted(sizes)[len(sizes) // 2] if sizes else 0
     notes = []
 
+    # **Is this a sprite at all?** The metrics assume a subject on transparency, cropped to itself.
+    # Pointed at a full-canvas opaque image -- a frame exported from an animation, a screenshot -- they
+    # do not measure the art, they measure the convention: bounding-box fill reads 1.000 and outline
+    # variation reads 0.000 whatever is drawn. Both then raise notes that are simply false.
+    #
+    # Measured on 40 frames of a pixel-art animation: raw, the two metrics gave exactly those values
+    # and 40 of 40 frames were flagged. After the background was made transparent and each frame
+    # cropped to its subject, the same frames measured 0.642 and 0.564 -- inside the reference range,
+    # and the two corpora became comparable at all. **The notes had been about the export.**
+    rendered_frame = bool(coords) and len(coords) == w * h and fill > 0.98 and var == 0.0
+
     if not coords:
         notes.append("the image is fully transparent")
+    elif rendered_frame:
+        notes.append(
+            "every pixel is opaque and one colour fills the frame, so this reads as a rendered frame "
+            "rather than a sprite; bounding-box fill and outline variation cannot be measured on it, "
+            "and any note they would raise is about the export rather than the drawing. Make the "
+            "background transparent and crop to the subject, then measure again.")
     else:
         # Thresholds come from `calibration`, which holds measured percentiles from 120 real sprites.
         # They used to be chosen by feel, and one of them was wrong by a factor of two: "isolated

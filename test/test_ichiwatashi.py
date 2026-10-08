@@ -17,6 +17,10 @@ from ichiwatashi.judge import judge as judge_fn
 from ichiwatashi import palette as P
 
 
+def coords_note(r):
+    return r.notes
+
+
 def flat(size, colour=(0, 0, 0, 255)):
     return Image.new("RGBA", size, colour)
 
@@ -87,6 +91,48 @@ class TestJudge(unittest.TestCase):
             for x in range(400):
                 px[x, y] = ((x * 3 + y) % 256, (y * 5 + x) % 256, (x ^ y) % 256)
         self.assertTrue(len(P.sample(im, 8)) <= 8)
+
+    def test_a_rendered_frame_is_not_measured_as_a_sprite(self):
+        """**Found by pointing the judge at 40 frames of a pixel-art animation.**
+
+        Those frames are opaque and fill their canvas, and the subject sits on a background rather
+        than on transparency. Raw, they measured bounding-box fill 1.000 and outline variation 0.000
+        -- which raise "the silhouette is a block" and "the outline is flat" -- and 40 of 40 were
+        flagged. After the background was made transparent and the frames cropped, the same frames
+        measured 0.642 and 0.564. **The two notes had been about the export, not the drawing.**
+        """
+        # A full-canvas opaque frame with a drawn subject on a flat background.
+        im = Image.new("RGBA", (32, 32), (0, 0x5D, 0x77, 255))
+        px = im.load()
+        for y in range(10, 22):
+            for x in range(10, 22):
+                px[x, y] = (0xFF, 0x63, 0x63, 255)
+        r = judge_fn(im)
+        self.assertEqual(r.bbox_fill, 1.0)
+        self.assertEqual(r.outline_variation, 0.0)
+        self.assertEqual(len(r.notes), 1,
+                         "the wrong number of notes for a rendered frame: %s" % r.notes)
+        self.assertIn("rendered frame", r.notes[0])
+        self.assertNotIn("block", r.notes[0])
+        self.assertNotIn("flat colour", r.notes[0])
+
+    def test_a_transparent_sprite_is_still_measured_normally(self):
+        """The guard must not swallow real sprites.
+
+        Note the shape: a **disc**, not a rectangle. A solid rectangle cropped to itself has a
+        bounding-box fill of exactly 1.000 whatever its transparency, so using one here would be
+        testing the guard against a case that cannot distinguish it from a rendered frame.
+        """
+        im = Image.new("RGBA", (32, 32), (0, 0, 0, 0))
+        px = im.load()
+        for y in range(32):
+            for x in range(32):
+                if (x - 15.5) ** 2 + (y - 15.5) ** 2 <= 10 * 10:
+                    px[x, y] = (0xFF, 0x63, 0x63, 255)
+        r = judge_fn(im)
+        self.assertLess(r.bbox_fill, 0.9, "a disc should not fill its bounding box")
+        self.assertFalse(any("rendered frame" in n for n in r.notes))
+        self.assertLess(len(coords_note(r)), 4)
 
 
 class TestPalette(unittest.TestCase):
