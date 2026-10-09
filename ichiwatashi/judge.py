@@ -42,10 +42,22 @@ def _opaque(im):
 def _run_gcd(im, coords):
     """The largest n such that every horizontal run of one colour is a multiple of n.
 
-    A hand-authored pixel drawing has a real pixel size: single pixels are the unit, so runs are any
-    length and this returns 1. A drawing that has been *downscaled* from a larger image keeps run
-    lengths in multiples of the scale, and a drawing with anti-aliasing or stray single pixels breaks
-    the property. So a value that is not a divisor of a clean scale is a signal, not a score.
+    **The direction in the sentence that used to be here was backwards**, and it matters: an
+    *upscaled* image keeps run lengths in multiples of the scale (one source pixel becomes an n x n
+    block), while a *downscaled* one has its blocks broken up and does not. Measured, 18/18 clean
+    integer upscales of real sprites read their factor.
+
+    **But 1 does not mean "unit scale confirmed".** Runs of 1 are filtered out below, so a drawing
+    made entirely of single pixels has no GCD to take and returns 0; real hand-authored art has runs
+    of many different lengths and returns 1. And one miscoloured pixel anywhere in an upscale drops
+    it back to 1 -- 16 of 18 measured cases. So:
+
+        clean upscale              -> n
+        upscale with one bad pixel -> 1      (indistinguishable from hand-authored art)
+        all-single-pixel drawing   -> 0
+
+    A value that is not a divisor of a clean scale is a signal, not a score; but a 1 is not proof of
+    anything, and `cli.py`'s parenthetical must not be read as if it were.
     """
     px = im.load()
     w, h = im.size

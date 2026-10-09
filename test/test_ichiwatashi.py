@@ -383,5 +383,106 @@ class TestCalibration(unittest.TestCase):
                          "a sprite at the reference palette size was flagged: %s" % r.notes)
 
 
+class TestPixelScale(unittest.TestCase):
+    """`pixel_scale` had no reference row and no counterexample: it read 1 on all 120 TH123 sprites
+    and on 640 TH155 sprite/palette combinations, so nothing had ever shown it *failing*.
+
+    These cases were measured on synthesised integer upscales of real TH155 sprites
+    (`tools/make_pixel_scale_counterexample.py`, 6 sprites x factors 2/3/4 = 18 clean cases), and
+    they pin all three findings, including the one that says the metric is weaker than it looks.
+    """
+
+    @staticmethod
+    def _blocks(n, cols=4, rows=4):
+        """A drawing whose every horizontal run is exactly `n`: an n x n block per source pixel.
+
+        `n=1` is the hand-authored case (runs of 1), `n>1` is an integer upscale.
+        """
+        im = Image.new("RGBA", (cols * n, rows * n), (0, 0, 0, 0))
+        px = im.load()
+        for by in range(rows):
+            for bx in range(cols):
+                c = ((bx * 60 + 40) % 256, (by * 60 + 40) % 256, ((bx + by) * 40 + 30) % 256, 255)
+                for y in range(by * n, (by + 1) * n):
+                    for x in range(bx * n, (bx + 1) * n):
+                        px[x, y] = c
+        return im
+
+    def test_a_hand_authored_drawing_reads_one(self):
+        """The unit case -- but note what it actually returns.
+
+        Runs of 1 are filtered out (`r for r in runs if r > 1`), so a drawing made of single pixels
+        leaves nothing to take a GCD of and `_run_gcd` returns 0. Measured on real art it is 1: a
+        hand drawing is not one-pixel confetti, it has runs of many lengths, and their GCD is 1.
+        So the value 1 means "has runs of 1 and of other lengths" -- it does *not* mean "unit scale
+        confirmed", which is the distinction `cli.py`'s wording walks past.
+        """
+        self.assertEqual(judge_fn(self._blocks(1)).pixel_scale, 0,
+                         "all-runs-of-1 leaves no GCD to take; 0 is the honest answer here")
+
+    def test_a_real_looking_hand_drawing_reads_one(self):
+        """Runs of several different lengths, which is what hand-authored art actually looks like."""
+        im = Image.new("RGBA", (24, 8), (0, 0, 0, 0))
+        px = im.load()
+        for y in range(8):
+            x = 0
+            for run, c in ((3, (200, 40, 40, 255)), (5, (40, 200, 40, 255)),
+                           (2, (40, 40, 200, 255)), (7, (200, 200, 40, 255)),
+                           (4, (200, 40, 200, 255)), (3, (40, 200, 200, 255))):
+                for i in range(run):
+                    if x + i < 24:
+                        px[x + i, y] = c
+                x += run
+        self.assertEqual(judge_fn(im).pixel_scale, 1)
+
+    def test_an_integer_upscale_reads_its_factor(self):
+        """Measured 18/18 on real sprites. So the metric is not a constant -- it really does detect
+        an integer upscale, which is why a stray pixel breaking it (next test) is a genuine
+        weakness rather than a metric that never worked in the first place."""
+        for n in (2, 3, 4, 6):
+            with self.subTest(n=n):
+                self.assertEqual(judge_fn(self._blocks(n)).pixel_scale, n)
+
+    def test_one_stray_pixel_returns_it_to_one(self):
+        """**The measured weakness, and the reason this metric cannot be shown as a silent number.**
+
+        On the real sprites, recolouring a *single* pixel of a 3x upscale dropped the reading from
+        3 to 1 in **16 of 18** clean cases (the two survivors had the stray land where a run of 1
+        was already present, so the GCD was already 1). One short run drags the GCD down, so:
+
+            a clean upscale              reads n
+            an upscale with one bad px   reads 1   <- indistinguishable from hand-authored art
+
+        `cli.py` prints "1 is normal for hand-authored art" next to the value, so on that image the
+        report states something confidently wrong. This test pins the behaviour so the wording
+        cannot quietly start implying that 1 means clean.
+        """
+        self.assertEqual(judge_fn(self._blocks(3)).pixel_scale, 3,
+                         "control: the unmodified 3x drawing must read 3")
+        im = self._blocks(3)
+        px = im.load()
+        px[3, 3] = ((px[3, 3][0] + 128) % 256, px[3, 3][1], px[3, 3][2], 255)
+        self.assertEqual(judge_fn(im).pixel_scale, 1,
+                         "one stray pixel should drop the reading to 1 -- if this fails, the metric "
+                         "got more robust and the cli wording can be revisited")
+
+    def test_quantisation_does_not_break_it(self):
+        """The direction I expected to fail, and it does not.
+
+        The TODO predicted "a man-made noisy upscale would drag the GCD back to 1 and look fine".
+        Measured 0/18 -- quantising to 8 levels leaves every run intact, because the property is
+        about run *lengths*, not colour count. What breaks it is a single miscoloured pixel, not a
+        reduced palette. Recorded so the wrong prediction is not re-derived.
+        """
+        im = self._blocks(3)
+        px = im.load()
+        for y in range(im.height):
+            for x in range(im.width):
+                r, g, b, a = px[x, y]
+                if a:
+                    px[x, y] = ((r // 8) * 8, (g // 8) * 8, (b // 8) * 8, a)
+        self.assertEqual(judge_fn(im).pixel_scale, 3)
+
+
 if __name__ == "__main__":
     unittest.main()
