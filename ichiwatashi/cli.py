@@ -14,8 +14,16 @@ from pathlib import Path
 def _fmt_report(r, name):
     lines = ["%s  %dx%d  %d opaque pixel(s)" % (name, r.width, r.height, r.opaque)]
     lines.append("  palette          %d colour(s)" % r.palette_size)
-    lines.append("  pixel scale      %d%s" % (r.pixel_scale,
-                 "" if r.pixel_scale != 1 else "  (1 is normal for hand-authored art)"))
+    # The parenthetical that used to be here was "(1 is normal for hand-authored art)", which is
+    # true and misleading: 1 is also what an integer upscale reads once one pixel has been touched
+    # up, and `pixel_scale` alone cannot tell the two apart. So report the factor the runs actually
+    # support alongside it, and let `upscale == 0` carry the "nothing found" case explicitly.
+    if r.upscale > 1:
+        lines.append("  pixel scale      %d  (runs support a factor of %d, %.1f%% of them)"
+                     % (r.pixel_scale, r.upscale, 100 * r.upscale_fraction))
+    else:
+        lines.append("  pixel scale      %d  (no integer factor found; 1 is normal for "
+                     "hand-authored art)" % r.pixel_scale)
     lines.append("  isolated pixels  %d  (%.2f%%)" %
                  (r.isolated, 100 * r.isolated_rate))
     lines.append("  clusters         %d, largest %d (%.1f%%), median %s" %
@@ -67,33 +75,71 @@ def cmd_palette(a):
     return 0
 
 
+# Explicit per-op argument lists. An earlier version guessed the keys from the op name and got
+# `cone` wrong, because a cone takes (y0, y1, w0, w1) while a rectangle takes (x0, y0, x1, y1) --
+# a name-based guess cannot tell those apart, and the failure was a TypeError from deep inside.
+SHAPE_ARGS = {
+    "rect": ("x0", "y0", "x1", "y1"),
+    "line": ("x0", "y0", "x1", "y1"),
+    "disc": ("cx", "cy", "r"),
+    "trap": ("y0", "y1", "w0", "w1"),
+    "cone": ("y0", "y1", "w0", "w1"),
+}
+
+
+class SpecError(Exception):
+    """A problem with the shape script itself, named by step."""
+
+
+def plan_steps(spec):
+    """Validate a shape script and return [(op, kwargs)] without drawing anything.
+
+    Split out of `cmd_build` for two reasons, both from measurement. The test that covers a missing
+    field used to spawn a real subprocess to read one error string, and on Windows that flakes
+    (`OSError: [WinError 6]`) -- it failed roughly one run in three. And a validator that returns a
+    value is testable directly, which a `SystemExit` raised mid-draw is not.
+
+    Raises SpecError naming the step and the field, never a bare KeyError/IndexError: a traceback
+    from inside `step[k]` tells the reader nothing about which step or which field was wrong.
+    """
+    if "width" not in spec or "height" not in spec:
+        raise SpecError("spec: 'width' and 'height' are required")
+    if not isinstance(spec.get("steps"), list):
+        raise SpecError("spec: 'steps' must be a list")
+    plan = []
+    for i, step in enumerate(spec["steps"]):
+        if not isinstance(step, dict):
+            raise SpecError("step %d: not an object" % i)
+        kind = step.get("op")
+        if kind == "outline":
+            if "key" not in step:
+                raise SpecError("step %d (outline): missing key" % i)
+            plan.append(("outline", dict(step)))
+            continue
+        if kind not in SHAPE_ARGS:
+            raise SpecError("step %d: unknown op %r (known: %s, outline)"
+                            % (i, kind, ", ".join(sorted(SHAPE_ARGS))))
+        missing = [k for k in SHAPE_ARGS[kind] if k not in step]
+        if missing:
+            raise SpecError("step %d (%s): missing %s" % (i, kind, ", ".join(missing)))
+        if "key" not in step:
+            raise SpecError("step %d (%s): missing key" % (i, kind))
+        plan.append((kind, dict(step)))
+    return plan
+
+
 def cmd_build(a):
     from . import builder as B
 
     spec = json.loads(Path(a.script).read_text(encoding="utf-8"))
     canvas = B.Canvas(spec["width"], spec["height"])
-    # Explicit per-op argument lists. An earlier version guessed the keys from the op name and got
-    # `cone` wrong, because a cone takes (y0, y1, w0, w1) while a rectangle takes (x0, y0, x1, y1) --
-    # a name-based guess cannot tell those apart, and the failure was a TypeError from deep inside.
-    shapes = {
-        "rect": ("x0", "y0", "x1", "y1"),
-        "line": ("x0", "y0", "x1", "y1"),
-        "disc": ("cx", "cy", "r"),
-        "trap": ("y0", "y1", "w0", "w1"),
-        "cone": ("y0", "y1", "w0", "w1"),
-    }
-    for i, step in enumerate(spec["steps"]):
-        kind = step.get("op")
+    for kind, step in plan_steps(spec):
         if kind == "outline":
             canvas.outline(step["key"], diagonal=step.get("diagonal", False))
             continue
-        if kind not in shapes:
-            raise SystemExit("step %d: unknown op %r (known: %s, outline)"
-                             % (i, kind, ", ".join(sorted(shapes))))
-        missing = [k for k in shapes[kind] if k not in step]
-        if missing:
-            raise SystemExit("step %d (%s): missing %s" % (i, kind, ", ".join(missing)))
-        args = [step[k] for k in shapes[kind]]
+        # `rect`/`line`/`disc`/`trap`/`cone` are the Canvas methods; `getattr` rather than a dict of
+        # bound methods because the canvas is created per call and the names are already validated.
+        args = [step[k] for k in SHAPE_ARGS[kind]]
         if kind in ("trap", "cone") and "cx" in step:
             args.append(step["cx"])
         args.append(step["key"])

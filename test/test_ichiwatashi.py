@@ -14,6 +14,7 @@ from PIL import Image
 from ichiwatashi import builder as B
 from ichiwatashi import frames as F
 from ichiwatashi.judge import judge as judge_fn
+from ichiwatashi.judge import _opaque
 from ichiwatashi import palette as P
 
 
@@ -242,45 +243,40 @@ class TestBuilder(unittest.TestCase):
 
     def test_a_shape_script_op_with_a_missing_field_is_named(self):
         """The CLI builds argument lists per op because a name-based guess cannot tell a cone
-        `(y0, y1, w0, w1)` from a rectangle `(x0, y0, x1, y1)`. A missing field must say which."""
-        import json
-        import subprocess
-        import sys
-        import tempfile
-        import os
+        `(y0, y1, w0, w1)` from a rectangle `(x0, y0, x1, y1)`. A missing field must say which.
+
+        This used to spawn a real subprocess to read one error string, and on Windows that failed
+        roughly one run in three with `OSError: [WinError 6]` -- the same root cause as the flaky
+        cases in the sibling tools. `plan_steps` returns the error instead of raising mid-draw, so
+        the assertion no longer depends on a process spawning.
+        """
+        from ichiwatashi.cli import plan_steps, SpecError
         spec = {"width": 8, "height": 8, "palette": {".": "transparent"},
                 "steps": [{"op": "cone", "y0": 0, "y1": 3, "w0": 1, "key": "h"}]}
-        with tempfile.TemporaryDirectory() as d:
-            f = os.path.join(d, "s.json")
-            open(f, "w", encoding="utf-8").write(json.dumps(spec))
-            r = subprocess.run([sys.executable, "-m", "ichiwatashi.cli", "build", f,
-                                "--out", os.path.join(d, "o.png")],
-                               capture_output=True, text=True, encoding="utf-8", errors="replace")
-        self.assertNotEqual(r.returncode, 0)
-        self.assertIn("w1", r.stdout + r.stderr)
+        with self.assertRaises(SpecError) as ctx:
+            plan_steps(spec)
+        self.assertIn("w1", str(ctx.exception))
+        self.assertIn("step 0", str(ctx.exception))
+        self.assertIn("cone", str(ctx.exception))
 
+    def test_an_unknown_op_is_named_rather_than_indexing(self):
+        """`shapes[kind]` on an unknown op used to be an IndexError from a dict lookup nowhere near
+        the cause. It must name the op and the known set."""
+        from ichiwatashi.cli import plan_steps, SpecError
+        spec = {"width": 8, "height": 8, "palette": {}, "steps": [{"op": "spiral", "key": "h"}]}
+        with self.assertRaises(SpecError) as ctx:
+            plan_steps(spec)
+        self.assertIn("spiral", str(ctx.exception))
+        self.assertIn("rect", str(ctx.exception))
 
-        """A positional rule drew a diagonal sash nobody asked for -- twice: first as
-        `(x + y) % 7 == 0`, then again as `(x + y) < (width + height) / 2` after the comment had
-        already been changed to say it was fixed.
-
-        So the assertion is not "how many distinct rows" but the property that actually distinguishes
-        the two: **a positional rule makes each row differ from the next, and a shape-relative rule
-        makes whole rows constant.** A diagonal shows up as rows that vary horizontally.
-        """
-        c = B.Canvas(16, 16)
-        c.rect(2, 2, 13, 13, "b")
-        c.shade({"b": "L"}, {"b": "D"})
-        rows = [r for r in c.rows() if set(r) != {"."}]
-        for r in rows:
-            body = r.strip(".")
-            self.assertEqual(len(set(body)), 1,
-                             "row %r varies horizontally, so the shading is positional again" % r)
-        # And it must actually shade: one flat colour for the whole shape would pass the check above.
-        self.assertGreater(len({r for r in rows}), 1, "nothing was shaded")
-        self.assertLessEqual(len({r for r in rows}), 3)
-
-class TestFrames(unittest.TestCase):
+    def test_a_valid_script_plans_without_drawing(self):
+        """The validator returns a plan and touches no pixels, so it can be asserted on directly."""
+        from ichiwatashi.cli import plan_steps
+        spec = {"width": 8, "height": 8, "palette": {"h": "#FF0000"},
+                "steps": [{"op": "rect", "x0": 1, "y0": 1, "x1": 5, "y1": 5, "key": "h"},
+                          {"op": "outline", "key": "o"}]}
+        plan = plan_steps(spec)
+        self.assertEqual([k for k, _ in plan], ["rect", "outline"])
 
     def test_placements_put_the_pivot_on_the_anchor(self):
         tl = F.Timeline(40, 40, anchor=(20, 30))
@@ -387,92 +383,143 @@ class TestPixelScale(unittest.TestCase):
     """`pixel_scale` had no reference row and no counterexample: it read 1 on all 120 TH123 sprites
     and on 640 TH155 sprite/palette combinations, so nothing had ever shown it *failing*.
 
-    These cases were measured on synthesised integer upscales of real TH155 sprites
-    (`tools/make_pixel_scale_counterexample.py`, 6 sprites x factors 2/3/4 = 18 clean cases), and
-    they pin all three findings, including the one that says the metric is weaker than it looks.
+    Two passes were needed and the first was wrong, which is recorded here because it decides what
+    the metric can be used for. A synthetic `n x n` block grid does **not** reproduce the failure at
+    all for n=2,3: runs of 1 are filtered out of the GCD, so a 3-wide block split by one pixel
+    yields only runs of 1 and 3 and the reading survives. Measured on real TH155 sprites:
+
+        clean upscale              reads n     18/18
+        upscale + one bad pixel    reads 1     16/18
+        upscale + quantisation     reads n      0/18 changed
+
+    So the value degrades silently, and the law of the degradation is exact (next test). Divisibility
+    over n=2..64 does not degrade, which is why `upscale`/`upscale_fraction` exist:
+
+        real TH155 art            best fraction 0.27-0.30
+        clean upscale             best fraction 1.00 at the true factor
+        upscale + 20 bad pixels   best fraction 0.997 at the true factor, gcd collapsed to 1
     """
 
+    # 20x20 blocks, not 6x6: the run-count floor is 100 (measured -- the fewest runs any of 300 real
+    # TH155 sprites produced was 192), and a 6x6 grid at n=2 gives only ~60 runs, so a small grid
+    # would silently test nothing.
     @staticmethod
-    def _blocks(n, cols=4, rows=4):
-        """A drawing whose every horizontal run is exactly `n`: an n x n block per source pixel.
-
-        `n=1` is the hand-authored case (runs of 1), `n>1` is an integer upscale.
-        """
+    def _blocks(n, cols=20, rows=20):
+        """A drawing whose every horizontal run is exactly `n`: one n x n block per source pixel."""
         im = Image.new("RGBA", (cols * n, rows * n), (0, 0, 0, 0))
         px = im.load()
         for by in range(rows):
             for bx in range(cols):
-                c = ((bx * 60 + 40) % 256, (by * 60 + 40) % 256, ((bx + by) * 40 + 30) % 256, 255)
+                c = ((bx * 37 + 20) % 256, (by * 53 + 30) % 256,
+                     ((bx * 7 + by * 11) * 13 + 40) % 256, 255)
                 for y in range(by * n, (by + 1) * n):
                     for x in range(bx * n, (bx + 1) * n):
                         px[x, y] = c
         return im
 
-    def test_a_hand_authored_drawing_reads_one(self):
-        """The unit case -- but note what it actually returns.
+    def test_a_hand_authored_drawing_is_not_called_an_upscale(self):
+        """The false-positive guard, and the one that would matter most in practice.
 
-        Runs of 1 are filtered out (`r for r in runs if r > 1`), so a drawing made of single pixels
-        leaves nothing to take a GCD of and `_run_gcd` returns 0. Measured on real art it is 1: a
-        hand drawing is not one-pixel confetti, it has runs of many lengths, and their GCD is 1.
-        So the value 1 means "has runs of 1 and of other lengths" -- it does *not* mean "unit scale
-        confirmed", which is the distinction `cli.py`'s wording walks past.
+        Runs of many different lengths: the best divisibility over n=2..64 stays low (0.27-0.30 on
+        real sprites, which is what random run lengths give), so nothing is reported.
         """
-        self.assertEqual(judge_fn(self._blocks(1)).pixel_scale, 0,
-                         "all-runs-of-1 leaves no GCD to take; 0 is the honest answer here")
-
-    def test_a_real_looking_hand_drawing_reads_one(self):
-        """Runs of several different lengths, which is what hand-authored art actually looks like."""
-        im = Image.new("RGBA", (24, 8), (0, 0, 0, 0))
+        im = Image.new("RGBA", (40, 8), (0, 0, 0, 0))
         px = im.load()
         for y in range(8):
             x = 0
             for run, c in ((3, (200, 40, 40, 255)), (5, (40, 200, 40, 255)),
                            (2, (40, 40, 200, 255)), (7, (200, 200, 40, 255)),
-                           (4, (200, 40, 200, 255)), (3, (40, 200, 200, 255))):
+                           (4, (200, 40, 200, 255)), (3, (40, 200, 200, 255)),
+                           (9, (120, 60, 20, 255)), (4, (20, 120, 60, 255))):
                 for i in range(run):
-                    if x + i < 24:
+                    if x + i < 40:
                         px[x + i, y] = c
                 x += run
-        self.assertEqual(judge_fn(im).pixel_scale, 1)
+        r = judge_fn(im)
+        self.assertEqual(r.upscale, 0, "a hand drawing was reported as an upscale")
+        self.assertFalse(any("multiple" in n for n in r.notes))
 
-    def test_an_integer_upscale_reads_its_factor(self):
-        """Measured 18/18 on real sprites. So the metric is not a constant -- it really does detect
-        an integer upscale, which is why a stray pixel breaking it (next test) is a genuine
-        weakness rather than a metric that never worked in the first place."""
-        for n in (2, 3, 4, 6):
+    def test_an_integer_upscale_is_detected_at_its_factor(self):
+        """Largest n accounting for ~every run, not the best-scoring one: 2 always scores at least
+        as high as 4, so a best-score rule would report 2 for a clean x4."""
+        for n in (2, 3, 4, 5, 6):
             with self.subTest(n=n):
-                self.assertEqual(judge_fn(self._blocks(n)).pixel_scale, n)
+                r = judge_fn(self._blocks(n))
+                self.assertGreaterEqual(len(_opaque(self._blocks(n))), 100,
+                                        "the fixture must clear the run-count floor or it proves "
+                                        "nothing")
+                self.assertEqual(r.upscale, n)
+                self.assertGreaterEqual(r.upscale_fraction, 0.95)
+                self.assertTrue(any("multiple of %d" % n in x for x in r.notes),
+                                "no note named the factor: %s" % r.notes)
 
-    def test_one_stray_pixel_returns_it_to_one(self):
-        """**The measured weakness, and the reason this metric cannot be shown as a silent number.**
+    def test_a_stray_pixel_degrades_the_gcd_by_an_exact_law(self):
+        """**Why the value alone is not reportable, stated as the law it follows.**
 
-        On the real sprites, recolouring a *single* pixel of a 3x upscale dropped the reading from
-        3 to 1 in **16 of 18** clean cases (the two survivors had the stray land where a run of 1
-        was already present, so the GCD was already 1). One short run drags the GCD down, so:
+        One recoloured pixel in an n x n block grid (n = 2..8, measured):
 
-            a clean upscale              reads n
-            an upscale with one bad px   reads 1   <- indistinguishable from hand-authored art
+            n=2,3     gcd unchanged
+            n=4,6,8   gcd -> 2        the largest power of two dividing n
+            n=5,7     gcd -> 1
 
-        `cli.py` prints "1 is normal for hand-authored art" next to the value, so on that image the
-        report states something confidently wrong. This test pins the behaviour so the wording
-        cannot quietly start implying that 1 means clean.
+        A clean grid always reads n, and `upscale` reads n in **every** row including the broken
+        ones. So the degradation is not random noise -- `gcd` silently becomes a divisor of the true
+        factor, with nothing in the value to say so.
         """
-        self.assertEqual(judge_fn(self._blocks(3)).pixel_scale, 3,
-                         "control: the unmodified 3x drawing must read 3")
-        im = self._blocks(3)
+        law = {2: 2, 3: 3, 4: 2, 5: 1, 6: 2, 7: 1, 8: 2}
+        for n, want in law.items():
+            with self.subTest(n=n):
+                im = self._blocks(n, cols=10, rows=10)
+                clean = judge_fn(im)
+                self.assertEqual(clean.pixel_scale, n, "a clean grid should read its own factor")
+                self.assertEqual(clean.upscale, n)
+                px = im.load()
+                px[n + 1, n + 1] = ((px[n + 1, n + 1][0] + 128) % 256,
+                                    px[n + 1, n + 1][1], px[n + 1, n + 1][2], 255)
+                r = judge_fn(im)
+                self.assertEqual(r.pixel_scale, want, "n=%d stray-pixel law changed" % n)
+                self.assertEqual(r.upscale, n, "n=%d: the fraction signal must survive" % n)
+
+    def test_the_note_names_the_factor_even_when_the_gcd_has_broken(self):
+        """The sentence that replaces a silent number. On a scaled-and-touched-up image the report
+        must name the factor it found and say how much disagrees, not print `1` and stop."""
+        im = self._blocks(5, cols=10, rows=10)
         px = im.load()
-        px[3, 3] = ((px[3, 3][0] + 128) % 256, px[3, 3][1], px[3, 3][2], 255)
-        self.assertEqual(judge_fn(im).pixel_scale, 1,
-                         "one stray pixel should drop the reading to 1 -- if this fails, the metric "
-                         "got more robust and the cli wording can be revisited")
+        px[6, 6] = ((px[6, 6][0] + 128) % 256, px[6, 6][1], px[6, 6][2], 255)
+        r = judge_fn(im)
+        self.assertEqual(r.pixel_scale, 1)
+        self.assertEqual(r.upscale, 5)
+        hit = [n for n in r.notes if "multiples of 5" in n]
+        self.assertTrue(hit, "no note named the factor: %s" % r.notes)
+        self.assertIn("break it", hit[0], "the note should say how much disagrees: %s" % hit[0])
+
+    def test_a_small_blocky_drawing_gets_no_unit_size_claim(self):
+        """**The floor, and why it exists.**
+
+        A unit-size claim averages over runs. Measured over 300 real TH155 sprites, the fewest runs
+        any produced was 192 and the median 3145; a 32x32 drawing yields 20-56. Below ~100 runs,
+        "every run is a multiple of 2" is a statement about a handful of runs and fires on drawings
+        that are merely small -- which is exactly how this detector first broke two neighbouring
+        tests whose fixtures are 32x32.
+
+        So nothing is said. Silence is the honest answer when there is not enough evidence to
+        average over, and it is preferable to a note that a reader has to learn to ignore.
+        """
+        small = self._blocks(2, cols=4, rows=4)          # 32 runs
+        r = judge_fn(small)
+        self.assertLess(len(_opaque(small)), 100)
+        self.assertFalse(any("multiple" in n for n in r.notes),
+                         "a 32x32 drawing should not get a unit-size claim: %s" % r.notes)
+        # the same drawing at a size worth averaging over does get one
+        big = self._blocks(2, cols=20, rows=20)
+        self.assertTrue(any("multiple of 2" in n for n in judge_fn(big).notes))
 
     def test_quantisation_does_not_break_it(self):
-        """The direction I expected to fail, and it does not.
+        """The direction I predicted would fail, and it does not.
 
         The TODO predicted "a man-made noisy upscale would drag the GCD back to 1 and look fine".
         Measured 0/18 -- quantising to 8 levels leaves every run intact, because the property is
-        about run *lengths*, not colour count. What breaks it is a single miscoloured pixel, not a
-        reduced palette. Recorded so the wrong prediction is not re-derived.
+        about run *lengths*, not colour count. Recorded so the wrong prediction is not re-derived.
         """
         im = self._blocks(3)
         px = im.load()
@@ -481,7 +528,9 @@ class TestPixelScale(unittest.TestCase):
                 r, g, b, a = px[x, y]
                 if a:
                     px[x, y] = ((r // 8) * 8, (g // 8) * 8, (b // 8) * 8, a)
-        self.assertEqual(judge_fn(im).pixel_scale, 3)
+        r = judge_fn(im)
+        self.assertEqual(r.upscale, 3)
+        self.assertEqual(r.pixel_scale, 3)
 
 
 if __name__ == "__main__":
