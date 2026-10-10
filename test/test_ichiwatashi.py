@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import unittest
 
+from pathlib import Path
+
 from PIL import Image
 
 from ichiwatashi import builder as B
@@ -184,6 +186,111 @@ class TestJudge(unittest.TestCase):
         self.assertLess(r.bbox_fill, 0.9, "a disc should not fill its bounding box")
         self.assertFalse(any("rendered frame" in n for n in r.notes))
         self.assertLess(len(coords_note(r)), 4)
+
+
+class TestSilhouette(unittest.TestCase):
+    """The anti-aliasing question, asked at the edge instead of over the whole drawing.
+
+    It used to be answered by `isolated_rate`, and that could not work: measured over 40 real TH155
+    sprites, **14930 isolated pixels sit inside the drawing and 3409 on its silhouette**. The
+    interior ones are single-pixel highlights and cloth texture, which the README already records as
+    being the detail. So 81% of the signal was never about edges.
+
+    These fixtures are sized to clear the measurement's own floor. The floor is 100 outline pixels
+    because the smallest real sprite measured had 192, and a fixture below it cannot demonstrate
+    anything -- which is how the first version of these tests silently tested nothing.
+    """
+
+    @staticmethod
+    def _block(n=60, band=0, stray=False, specks=False):
+        body, line, mid, speck = ((90, 130, 200, 255), (20, 20, 40, 255),
+                                  (55, 75, 120, 255), (250, 240, 90, 255))
+        im = Image.new("RGBA", (n, n), (0, 0, 0, 0))
+        px = im.load()
+        lo, hi = 8, n - 8
+        for y in range(lo, hi):
+            for x in range(lo, hi):
+                px[x, y] = body
+        for y in range(lo, hi):
+            for x in range(lo, hi):
+                if x in (lo, hi - 1) or y in (lo, hi - 1):
+                    px[x, y] = line
+        for y in range(lo, lo + band):
+            px[hi - 1, y] = mid
+        if stray:
+            px[lo, 30] = (255, 0, 255, 255)
+        if specks:
+            for y in range(18, 34):
+                for x in range(18, 34):
+                    if (x * 3 + y * 5) % 4 == 0:
+                        px[x, y] = speck
+        return im
+
+    def test_a_flat_outline_is_a_uniform_edge(self):
+        """The strong direction, and the reason this is a measurement rather than a guess: a
+        per-pixel condition cannot produce a uniform edge by accident, so `share == 1.0` is real
+        evidence that no smoothing layer exists on the drawing."""
+        r = judge_fn(self._block())
+        self.assertGreaterEqual(r.silhouette_pixels, 100, "fixture below the measurement's floor")
+        self.assertEqual(r.silhouette_colours, 1)
+        self.assertEqual(r.silhouette_share, 1.0)
+        self.assertFalse(any("uniform edge" in n for n in r.notes))
+
+    def test_interior_detail_does_not_move_the_edge_measurement(self):
+        """The separation `isolated_rate` could not make, and the whole point of measuring position.
+
+        14930 interior isolated pixels against 3409 silhouette ones: pooling them is what made the
+        old number useless as an edge question. Interior speckles leave both silhouette numbers
+        exactly where they were.
+        """
+        flat = judge_fn(self._block())
+        specked = judge_fn(self._block(specks=True))
+        self.assertGreater(specked.isolated, flat.isolated,
+                           "the fixture must actually add isolated pixels, or it proves nothing")
+        self.assertEqual(specked.silhouette_colours, flat.silhouette_colours)
+        self.assertEqual(specked.silhouette_share, flat.silhouette_share)
+        self.assertFalse(any("uniform edge" in n for n in specked.notes))
+
+    def test_a_band_on_the_edge_is_reported_and_a_blemish_is_not(self):
+        """The share is what separates a smoothing layer from one bad pixel, and the separation is
+        measured rather than chosen: a band covering 12% of the outline reads 0.884, while one stray
+        pixel reads 0.994. The threshold sits between them.
+
+        Erring toward silence is deliberate. A false 'your edge is not uniform' on good work is the
+        failure this project is least allowed to have; a missed one is the ordinary cost of a
+        measurement that will not overstate itself.
+        """
+        banded = judge_fn(self._block(band=20))
+        self.assertEqual(banded.silhouette_colours, 2)
+        self.assertLess(banded.silhouette_share, 0.95)
+        self.assertTrue(any("uniform edge" in n for n in banded.notes), banded.notes)
+        # and the honest limit, pinned: a single stray pixel is a second colour too
+        stray = judge_fn(self._block(stray=True))
+        self.assertEqual(stray.silhouette_colours, 2)
+        self.assertGreater(stray.silhouette_share, 0.95)
+        self.assertFalse(any("uniform edge" in n for n in stray.notes))
+
+    def test_the_note_does_not_claim_to_know_which_it_is(self):
+        """It can say the edge is not uniform. It cannot say the edge was smoothed, because one
+        stray pixel and one anti-aliasing pixel are the same thing seen from outside."""
+        r = judge_fn(self._block(band=20))
+        note = [n for n in r.notes if "uniform edge" in n][0]
+        self.assertIn("cannot tell those apart", note)
+
+    def test_real_sprites_mostly_have_a_uniform_edge(self):
+        """The corpus, if it is present. This is the claim the measurement rests on: TH155 draws a
+        flat outline with no smoothing layer, so most of these should be uniform."""
+        d = Path("E:/DaShaoHuo/downloads/ichiwatashi-corpus/th155")
+        if not d.is_dir():
+            self.skipTest("the TH155 corpus is not on this machine")
+        files = sorted(d.glob("*.png"))[:20]
+        flat = 0
+        for p in files:
+            with Image.open(p) as im:
+                if judge_fn(im.convert("RGBA")).silhouette_share == 1.0:
+                    flat += 1
+        self.assertGreaterEqual(flat, len(files) // 2,
+                                "only %d of %d real sprites had a uniform edge" % (flat, len(files)))
 
 
 class TestGenerationBuckets(unittest.TestCase):

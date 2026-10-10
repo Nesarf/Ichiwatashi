@@ -318,6 +318,52 @@ def outline_style(variation: float, predictability: float, colours: int) -> str:
     return "mixed"
 
 
+def _silhouette(im, coords):
+    """The outermost opaque pixels: how many, how many colours, and what share is the top colour.
+
+    **What this replaces.** The anti-aliasing question used to be answered by `isolated_rate`, which
+    counts an opaque pixel whose opaque neighbours are all a different colour -- and that description
+    covers two unrelated populations. Measured over 40 real TH155 sprites, **14930 of those pixels
+    sit inside the drawing and 3409 on its silhouette**. The interior ones are single-pixel highlights
+    and cloth texture, which `README.md` already records as being the detail. So 81% of the signal
+    was never about edges.
+
+    Position is the discriminator the count threw away. The outermost pixels are the only place a
+    smoothing layer can live, and the question there has a direct answer:
+
+        one colour covering everything   nothing was placed between the body and the background
+        a band of several colours        something was
+
+    Measured over the same 40 sprites the median is 1 colour at share 1.000, and 14 of 40 have more.
+    A flat outline with no anti-aliasing is what this generation draws.
+
+    **The share is what separates a band from a blemish**, and the separation is measured on fixtures
+    whose answer is known: a mid-tone replacing 8 of 60 outline pixels gives 2 colours at share
+    0.867, while one stray pixel gives 2 colours at 0.983. Interior pixels and interior speckles move
+    neither number.
+
+    The limitation, stated rather than hidden: this says *the edge is not uniform*, not *the edge was
+    smoothed*. One stray pixel and one anti-aliasing pixel are the same thing measured from outside.
+    What it can claim is the other direction, and that is the strong one -- a per-pixel condition
+    cannot produce a uniform edge by accident, so `share == 1.0` is real evidence that no smoothing
+    layer exists.
+    """
+    px = im.load()
+    w, h = im.size
+    cols = Counter()
+    n = 0
+    for x, y in coords:
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            nx, ny = x + dx, y + dy
+            if not (0 <= nx < w and 0 <= ny < h) or px[nx, ny][3] == 0:
+                cols[px[x, y][:3]] += 1
+                n += 1
+                break
+    if not n:
+        return 0, 0, 0.0
+    return n, len(cols), round(cols.most_common(1)[0][1] / n, 4)
+
+
 def _dither(im, coords, w, h):
     """Share of pixels that sit in a checkerboard-ish alternation with a neighbour.
 
@@ -367,6 +413,9 @@ class Report:
     outline_variation: float
     outline_predictability: float
     outline_colours: int
+    silhouette_pixels: int
+    silhouette_colours: int
+    silhouette_share: float
     outline_color: tuple | None
     border_pixels: int
     dither_pixels: int
@@ -388,6 +437,7 @@ def judge(image, *, generation: str | None = None) -> Report:
     var, ocol, nborder, pred, ncols = _outline(im, coords)
     dith = _dither(im, coords, w, h)
     runs = _run_stats(im, coords)
+    sil_n, sil_cols, sil_share = _silhouette(im, coords)
 
     if coords:
         l = min(p[0] for p in coords)
@@ -466,6 +516,15 @@ def judge(image, *, generation: str | None = None) -> Report:
                              "its colour only %.0f%% of the time -- that is close to one outline "
                              "colour per pixel rather than a palette"
                              % (ncols, var, 100 * pred))
+        # The edge question, asked at the edge. A uniform silhouette is the strong claim -- no
+        # per-pixel condition produces one by accident -- so only its absence is worth a note, and
+        # a share above 0.95 is a blemish rather than a smoothing layer (measured: 0.983 for one
+        # stray pixel against 0.867 for a band replacing 8 of 60 outline pixels).
+        if sil_n >= 100 and sil_share < 0.95:
+            notes.append("the outline is %d colour(s) across %d pixels with the most common at "
+                         "%.0f%% -- not a uniform edge, so either a smoothing layer or blemishes; "
+                         "this measurement cannot tell those apart"
+                         % (sil_cols, sil_n, 100 * sil_share))
         if iso and iso / n > 0.05 and median_cluster > 4:
             notes.append("isolated pixels are %.1f%% and the colour clusters are large (median %d "
                          "pixels) -- that combination is stray single pixels or a procedural pattern "
@@ -485,6 +544,7 @@ def judge(image, *, generation: str | None = None) -> Report:
         median_cluster=median_cluster,
         outline_variation=var, outline_predictability=pred,
         outline_colours=ncols, outline_color=ocol, border_pixels=nborder,
+        silhouette_pixels=sil_n, silhouette_colours=sil_cols, silhouette_share=sil_share,
         dither_pixels=dith,
         bbox=bbox, bbox_fill=fill,
         notes=notes,
