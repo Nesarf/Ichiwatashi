@@ -10,6 +10,9 @@ import json
 import sys
 from pathlib import Path
 
+from . import calibration as C
+from .judge import outline_style
+
 
 def _fmt_report(r, name):
     lines = ["%s  %dx%d  %d opaque pixel(s)" % (name, r.width, r.height, r.opaque)]
@@ -28,10 +31,15 @@ def _fmt_report(r, name):
                  (r.isolated, 100 * r.isolated_rate))
     lines.append("  clusters         %d, largest %d (%.1f%%), median %s" %
                  (r.clusters, r.largest_cluster, 100 * r.largest_cluster_rate, r.median_cluster))
-    lines.append("  outline variation %.3f over %d border pixel(s)  %s" %
-                 (r.outline_variation, r.border_pixels,
-                  "flat -- known-good sprites vary this with the local colour"
-                  if r.outline_variation < 0.1 else ""))
+    # **The parenthetical that used to be here said a flat outline was the fault**, and it fired on
+    # 161 of 161 real TH155 sprites. Measuring both generations with one pipeline: TH123 sits at
+    # 0.726 and TH155 at 0.004, and both are correct work. So this names the style and prints the
+    # evidence instead of grading it -- `outline_style` is a description, not a score.
+    style = outline_style(r.outline_variation, r.outline_predictability, r.outline_colours)
+    lines.append("  outline          %s: variation %.3f over %d border pixel(s), %d colour(s), "
+                 "%.0f%% predictable from the fill"
+                 % (style, r.outline_variation, r.border_pixels, r.outline_colours,
+                    100 * r.outline_predictability))
     lines.append("  bounding box     %sx%s, %.0f%% full" % (r.bbox[0], r.bbox[1], 100 * r.bbox_fill))
     if r.dither_pixels:
         lines.append("  dither pixels    %d" % r.dither_pixels)
@@ -48,7 +56,7 @@ def cmd_judge(a):
 
     rc = 0
     for p in a.paths:
-        r = judge(p)
+        r = judge(p, generation=a.generation)
         print(_fmt_report(r, Path(p).name))
         print()
         if a.fail_on_note and r.notes:
@@ -191,6 +199,11 @@ def main(argv=None):
     j.add_argument("paths", nargs="+")
     j.add_argument("--fail-on-note", action="store_true",
                    help="exit non-zero when any note was raised, for use in a check")
+    j.add_argument("--generation", choices=C.GENERATIONS, default=None,
+                   help="which reference table applies. The two generations sit far apart -- "
+                        "TH123 at palette_size 26 and TH155 at 43 -- so judging one with the "
+                        "other's thresholds flags correct work (measured: 80 of 160 TH155 sprites "
+                        "against 8 with the right table). Defaults to %s." % C.DEFAULT_GENERATION)
     j.set_defaults(func=cmd_judge)
 
     p = sub.add_parser("palette", help="sample colours from a reference")

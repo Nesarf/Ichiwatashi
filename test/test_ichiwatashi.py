@@ -186,6 +186,81 @@ class TestJudge(unittest.TestCase):
         self.assertLess(len(coords_note(r)), 4)
 
 
+class TestGenerationBuckets(unittest.TestCase):
+    """A single reference table judged a second generation of correct work and flagged all of it.
+
+    TH123 and TH155 are different populations: `palette_size` has a median of 26 in one and 43 in
+    the other, and `outline_variation` 0.726 against 0.004. Measured end to end over 160 real TH155
+    sprites, judging them with the TH123 table raised a reference note on **80 of them (50%)**; with
+    their own table it is **8 (5%)**. So the bucket is not bookkeeping, it is the difference between
+    a report that fires on half of correct work and one that fires on a twentieth.
+
+    TH105 and TH123 are one bucket, not two: they agree on every metric to three decimals across
+    four characters and twelve comparisons.
+    """
+
+    def test_the_two_generations_are_named_and_one_table_is_the_default(self):
+        from ichiwatashi import calibration as C
+        self.assertEqual(tuple(C.GENERATIONS), ("th105/th123", "th155"))
+        self.assertEqual(C.DEFAULT_GENERATION, "th105/th123")
+        # the alias still resolves to the default bucket, so older callers keep working
+        self.assertIs(C.REFERENCE, C.REFERENCE_BY_GENERATION[C.DEFAULT_GENERATION])
+
+    def test_the_same_value_gets_different_verdicts_in_the_two_buckets(self):
+        """The regression this whole structure exists for, stated as one value and two answers."""
+        from ichiwatashi import calibration as C
+        # a palette_size of 70 is far above TH123's band and simply not a metric for TH155
+        self.assertIsNotNone(C.outside("palette_size", 70.0, generation="th105/th123"))
+        self.assertIsNone(C.outside("palette_size", 70.0, generation="th155"))
+        # a bbox_fill of 0.85 is above TH123's band and inside TH155's
+        self.assertIsNotNone(C.outside("bbox_fill", 0.85, generation="th105/th123"))
+        self.assertIsNone(C.outside("bbox_fill", 0.85, generation="th155"))
+        # and a metric that only exists in the TH155 bucket
+        self.assertIsNone(C.outside("outline_predictability", 0.30, generation="th105/th123"))
+        self.assertIsNotNone(C.outside("outline_predictability", 0.30, generation="th155"))
+
+    def test_an_unknown_generation_says_nothing_instead_of_guessing(self):
+        """Silence is right. Applying another era's thresholds is exactly what produced the
+        false-positive generation, so an unrecognised name must not fall back to the default."""
+        from ichiwatashi import calibration as C
+        self.assertIsNone(C.outside("palette_size", 70.0, generation="gba-era"))
+        self.assertIsNone(C.outside("bbox_fill", 0.85, generation="gba-era"))
+        self.assertEqual(C.how_far("bbox_fill", 0.85, generation="gba-era"), 0.0)
+
+    def test_palette_size_is_absent_from_the_th155_bucket_on_purpose(self):
+        """It is not a property of those drawings: the palettes are interchangeable within a
+        character, and 92.5% of sprites change colour count when decoded with another member of the
+        set. A threshold derived from one palette per sprite would be derived from a coin toss."""
+        from ichiwatashi import calibration as C
+        self.assertNotIn("palette_size", C.REFERENCE_BY_GENERATION["th155"])
+        self.assertIn("palette_size", C.REFERENCE_BY_GENERATION["th105/th123"])
+
+    def test_both_buckets_record_where_their_numbers_came_from(self):
+        """A threshold a reader cannot trace is an opinion."""
+        from ichiwatashi import calibration as C
+        for gen in C.GENERATIONS:
+            prov = C.PROVENANCE_BY_GENERATION[gen]
+            self.assertIn("source", prov)
+            self.assertGreater(prov["sample"], 0)
+            # and the note has to name the generation it used, or the reader cannot tell which
+            note = C.outside("bbox_fill", 99.0, generation=gen)
+            self.assertIsNotNone(note)
+            self.assertIn(gen, note)
+
+    def test_judge_passes_the_generation_through(self):
+        """The wiring, not just the table: `judge(..., generation=...)` has to reach `outside`."""
+        im = Image.new("RGBA", (16, 16), (0, 0, 0, 0))
+        px = im.load()
+        for y in range(2, 14):
+            for x in range(2, 14):
+                px[x, y] = (200, 60, 60, 255)
+        a = judge_fn(im)
+        b = judge_fn(im, generation="th155")
+        self.assertTrue(any("th105/th123" in n for n in a.notes) or not a.notes)
+        self.assertFalse(any("th105/th123" in n for n in b.notes),
+                         "the second call was judged with the first generation's table: %s" % b.notes)
+
+
 class TestPalette(unittest.TestCase):
 
     def test_merging_collapses_compression_noise(self):

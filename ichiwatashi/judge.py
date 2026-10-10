@@ -375,7 +375,7 @@ class Report:
     notes: list = field(default_factory=list)
 
 
-def judge(image) -> Report:
+def judge(image, *, generation: str | None = None) -> Report:
     """Measure one image. Deterministic: the same bytes always give the same report."""
     im = load_rgba(image)
     w, h = im.size
@@ -433,14 +433,19 @@ def judge(image) -> Report:
         # At most the two furthest-out metrics. Even with the margin, listing every qualifying one
         # turns the report into a wall of text that gets skimmed, and the point of the margin was to
         # make a note mean something.
+        # **Which generation is being measured decides which reference applies.** TH105 and TH123
+        # are one population (they agree to three decimals across four characters); TH155 is another,
+        # and the same sprite scores 16-37 on palette_size in one and 43 median in the other. Judging
+        # the second with the first is what flagged an entire generation of correct work.
+        gen = generation or calibration.DEFAULT_GENERATION
         found = []
         for metric, value in (("isolated_rate", iso / n),
                               ("bbox_fill", fill),
                               ("largest_cluster_rate", (sizes[0] if sizes else 0) / n),
                               ("palette_size", len(colours))):
-            msg = calibration.outside(metric, value)
+            msg = calibration.outside(metric, value, generation=gen)
             if msg:
-                found.append((calibration.how_far(metric, value), msg))
+                found.append((calibration.how_far(metric, value, generation=gen), msg))
         found.sort(reverse=True)
         notes.extend(m for _, m in found[:2])
 
