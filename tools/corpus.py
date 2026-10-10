@@ -60,7 +60,7 @@ def sha256_of(p: Path) -> str:
 
 def measure(p: Path, *, derived: bool, generation: str, source_id: str,
             eligibility: str, reject_reason: str | None,
-            derived_from: str | None, lossless: bool, now: str) -> dict:
+            derived_from: str | None, lossless: bool, now: str, indexed=None) -> dict:
     from PIL import Image
     with Image.open(p) as im:
         im = im.convert("RGBA")
@@ -81,6 +81,12 @@ def measure(p: Path, *, derived: bool, generation: str, source_id: str,
         "width": w,
         "height": h,
         "colours_used": r.colours_used,
+        # The indexed relationship, when the caller supplies it. `judge` is handed RGBA and cannot
+        # see indices, so these are None for a lossy or already-decoded source -- and a `null` that
+        # says "not measurable here" is better than a number that silently means something else.
+        "slots_used": (indexed or {}).get("slots_used"),
+        "colours_defined": (indexed or {}).get("colours_defined"),
+        "used_duplicate_share": (indexed or {}).get("used_duplicate_share"),
         "pixel_scale": r.pixel_scale,
         "upscale": r.upscale,
         "bbox_fill": round(r.bbox_fill, 4),
