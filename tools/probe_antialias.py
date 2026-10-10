@@ -1,5 +1,11 @@
 """Probe: can anti-aliasing be told apart from interior detail by where the pixel sits?
 
+**This one answered its question, and the answer is the basis of the shipped measurement.**
+Measured over 40 real TH155 sprites: 14930 isolated pixels sit inside the drawing and 3409 on its
+silhouette, so 81% of what `isolated_rate` counted was never about edges. Position is the
+discriminator it threw away. `probe_silhouette.py` builds the measurement on top of this; this file
+is kept because it is the evidence for the split rather than the thing that implements it.
+
 `isolated_rate` counts opaque pixels whose opaque neighbours are all a different colour. That
 description covers two unrelated things, which `README.md` already records as a hazard:
 

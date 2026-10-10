@@ -1,4 +1,25 @@
-"""Does a silhouette-only rule respond to anti-aliasing and ignore interior detail?
+"""[ABANDONED — the rule this tests does not work. Kept for one conclusion it reached honestly.]
+
+The rule below was: an anti-aliasing pixel is an outermost opaque pixel that differs from the
+neighbour one step inward. **It fails, and the table further down says so while labelling every row
+"OK"** -- a rendering bug in this probe that makes it look like a success. "ring + AA on 4 corners"
+counts 56 where it should count 4, because a conventional 1px outline ring is *itself* made of
+outermost pixels that differ from what they wrap. So the rule cannot separate an outline from a
+smoothing layer, and no fixture can rescue it.
+
+Two things in it are still worth keeping. Interior speckles genuinely do not move the number -- that
+is the separation `isolated_rate` could not make, because it pooled both populations. And a stray
+pixel on the silhouette is counted exactly like an anti-aliasing pixel, so *any* rule of this shape
+cannot distinguish "this was smoothed" from "this has a blemish".
+
+What replaced it is `probe_silhouette.py`, and the difference is the whole lesson: the working
+measurement is a property of the **outer edge as a whole** -- how many colours it uses and what share
+the most common one holds -- not a per-pixel predicate. A per-pixel rule cannot see that a uniform
+edge is strong evidence, because it never looks at the edge, only at pixels.
+
+Original description follows.
+
+Does a silhouette-only rule respond to anti-aliasing and ignore interior detail?
 
 `isolated_rate` pools two populations that have nothing to do with each other: measured over 40 real
 TH155 sprites, 14930 isolated pixels sit *inside* the drawing and 3409 on its silhouette. The
