@@ -21,7 +21,7 @@ general. `TODO.md` records the intent to widen it.
 
 ```
 metric                    p05     p25   median     p75     p95
-palette_size             16.0    22.0     26.0    31.0    37.0
+colours_used             16.0    22.0     26.0    31.0    37.0
 isolated_rate           0.074   0.099    0.116   0.134   0.160
 outline_variation       0.578   0.658    0.726   0.801   0.855
 bbox_fill               0.345   0.458    0.538   0.589   0.652
@@ -56,7 +56,7 @@ PROVENANCE_BY_GENERATION = {
         "sample": 160,
         "eligible": 160,
         "sampling": "four characters x 40 consecutive sprites, no random selection",
-        "caveat": ("palette_size is not a property of these drawings: the palettes are "
+        "caveat": ("colours_used is not a property of these drawings: the palettes are "
                    "interchangeable within a character and 92.5% of sprites change colour count "
                    "when decoded with another member of the set"),
     },
@@ -92,7 +92,7 @@ GENERATIONS = ("th105/th123", "th155")
 #: `tools/calibrate.py` and `tools/measure_generation_bucket.py` produce these.
 REFERENCE_BY_GENERATION = {
     "th105/th123": {
-        "palette_size": Percentiles(16.0, 22.0, 26.0, 31.0, 37.0),
+        "colours_used": Percentiles(16.0, 22.0, 26.0, 31.0, 37.0),
         # The rule this replaces fired above 5%. Real sprites live between 7.4% and 16%, so the old
         # threshold was below the fifth percentile of good work.
         "isolated_rate": Percentiles(0.074, 0.099, 0.116, 0.134, 0.160),
@@ -104,7 +104,7 @@ REFERENCE_BY_GENERATION = {
         "outline_variation": Percentiles(0.578, 0.658, 0.726, 0.801, 0.855),
     },
     "th155": {
-        # **`palette_size` is deliberately absent, and it is absent because it is not a property of
+        # **`colours_used` is deliberately absent, and it is absent because it is not a property of
         # the drawing on this generation.** TH155 sprites are palette indices; each character ships
         # a set of interchangeable palettes, and decoding one sprite with a different member of its
         # own set changes the measured colour count for 92.5% of sprites with a median spread of 27
@@ -124,7 +124,7 @@ REFERENCE_BY_GENERATION = {
 #: The reference consulted when a caller does not say which generation it is measuring.
 #:
 #: **This default is a known weakness and is named rather than hidden.** Judging a TH155 sprite
-#: without saying so applies TH123's `palette_size` band of 16-37 and, at a median of 43, most
+#: without saying so applies TH123's `colours_used` band of 16-37 and, at a median of 43, most
 #: TH155 sprites fall outside it. Pass `generation="th155"` to `judge()` to get the right table.
 DEFAULT_GENERATION = "th105/th123"
 

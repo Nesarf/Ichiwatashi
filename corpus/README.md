@@ -26,7 +26,7 @@
 | `lossless` | 是否为未经重编码的索引色/无损 PNG |
 | `format` | `png` · `gif` · `apng` · `8bpp-indexed` … |
 | `size`, `width`, `height` | 基本尺寸 |
-| `palette_size`, `pixel_scale`, `bbox_fill` | 与来源无关或敏感度已知的指标 |
+| `colours_used`, `pixel_scale`, `bbox_fill` | 与来源无关或敏感度已知的指标 |
 | `outline_variation`, `outline_predictability`, `outline_colours` | **必须与 `generation` 一起读** |
 | `metrics_schema` | 指标集版本 —— 跨版本比数值前先看这个 |
 | `first_seen`, `last_seen`, `times_seen` | 让重复抓取**可比**，而不是替换掉前一次 |

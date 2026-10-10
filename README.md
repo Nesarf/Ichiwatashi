@@ -31,7 +31,7 @@ pointed at **120 real sprites** (8bpp character frames from `th123a.dat`, 24–1
 
 | metric | p05 | p25 | median | p75 | p95 |
 |---|---|---|---|---|---|
-| `palette_size` | 16 | 22 | **26** | 31 | 37 |
+| `colours_used` | 16 | 22 | **26** | 31 | 37 |
 | `isolated_rate` | 0.074 | 0.099 | **0.116** | 0.134 | 0.160 |
 | `outline_variation` | 0.578 | 0.658 | **0.726** | 0.801 | 0.855 |
 | `bbox_fill` | 0.345 | 0.458 | **0.538** | 0.589 | 0.652 |

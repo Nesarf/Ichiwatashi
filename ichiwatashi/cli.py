@@ -16,7 +16,7 @@ from .judge import outline_style
 
 def _fmt_report(r, name):
     lines = ["%s  %dx%d  %d opaque pixel(s)" % (name, r.width, r.height, r.opaque)]
-    lines.append("  palette          %d colour(s)" % r.palette_size)
+    lines.append("  colours used     %d distinct, among the drawn pixels" % r.colours_used)
     # The parenthetical that used to be here was "(1 is normal for hand-authored art)", which is
     # true and misleading: 1 is also what an integer upscale reads once one pixel has been touched
     # up, and `pixel_scale` alone cannot tell the two apart. So report the factor the runs actually
@@ -201,7 +201,7 @@ def main(argv=None):
                    help="exit non-zero when any note was raised, for use in a check")
     j.add_argument("--generation", choices=C.GENERATIONS, default=None,
                    help="which reference table applies. The two generations sit far apart -- "
-                        "TH123 at palette_size 26 and TH155 at 43 -- so judging one with the "
+                        "TH123 at 26 colours and TH155 at 43 -- so judging one with the "
                         "other's thresholds flags correct work (measured: 80 of 160 TH155 sprites "
                         "against 8 with the right table). Defaults to %s." % C.DEFAULT_GENERATION)
     j.set_defaults(func=cmd_judge)

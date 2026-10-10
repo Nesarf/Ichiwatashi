@@ -398,7 +398,13 @@ class Report:
     width: int
     height: int
     opaque: int
-    palette_size: int
+    #: Distinct RGB values among the drawn pixels. **This is what the drawing *uses*, in the decoded
+    #: space the report was given.** It was called `palette_size` until the indexed measurement made
+    #: the difference visible, and the rename is the correction: on an indexed source the old name
+    #: described the palette's *defined* slots, while this measures the slots the drawing actually
+    #: references -- two different numbers, and naming one after the other is how a report gets read
+    #: wrongly. `measure_indexed` reports both, plus how many of the used slots are duplicates.
+    colours_used: int
     pixel_scale: int
     run_longest: int
     run_modal: int
@@ -422,6 +428,46 @@ class Report:
     bbox: tuple
     bbox_fill: float
     notes: list = field(default_factory=list)
+
+
+def measure_indexed(indices, palette_slots):
+    """The three colour counts an indexed source has, and what their differences mean.
+
+    **`judge` cannot make this distinction and does not pretend to.** It receives an RGBA image, so
+    the most it can count is distinct RGB values among the drawn pixels -- which on an indexed source
+    is *the slots the drawing references after the palette has collapsed them*, not the slots it
+    references. The old name used to paper over that, and the paper is what this function
+    removes.
+
+    Measured on TH155 (`th155.pak`), which is 8bpp palette indices:
+
+        one TFPA palette        256 slots, of which 70 are distinct colours
+        20 palettes pooled      20480 slots, 7632 distinct      -> 62.7% of slots are duplicates
+        a sprite's used range   18 indices / 18 colours, or 50 indices / 41 colours
+        200 sprites             142 use fewer distinct colours than indices
+                                (58 do not), with gaps up to 11 slots
+
+    So there are three numbers and they are all legitimate answers to "how many colours":
+
+        slots_defined   how many entries the palette declares
+        slots_used      how many of them the drawing references
+        colours_used    how many distinct colours those references land on
+
+    `slots_defined - colours_defined` is the palette's redundancy; `slots_used - colours_used` is how
+    much of its *used* range is duplicated. Neither is a fault -- a duplicated slot is usually a
+    deliberate spare in a swappable palette -- which is why this reports rather than scores.
+    """
+    slots_used = len({k for k in indices if k != 0})
+    colours_used = len({palette_slots[k][:3] for k in indices if k != 0})
+    defined = len({c[:3] for c in palette_slots})
+    return {
+        "slots_defined": len(palette_slots),
+        "colours_defined": defined,
+        "palette_duplicate_share": round(1 - defined / len(palette_slots), 4) if palette_slots else 0.0,
+        "slots_used": slots_used,
+        "colours_used": colours_used,
+        "used_duplicate_share": round(1 - colours_used / slots_used, 4) if slots_used else 0.0,
+    }
 
 
 def judge(image, *, generation: str | None = None) -> Report:
@@ -485,14 +531,14 @@ def judge(image, *, generation: str | None = None) -> Report:
         # make a note mean something.
         # **Which generation is being measured decides which reference applies.** TH105 and TH123
         # are one population (they agree to three decimals across four characters); TH155 is another,
-        # and the same sprite scores 16-37 on palette_size in one and 43 median in the other. Judging
+        # and the same sprite scores 16-37 on colours_used in one and 43 median in the other. Judging
         # the second with the first is what flagged an entire generation of correct work.
         gen = generation or calibration.DEFAULT_GENERATION
         found = []
         for metric, value in (("isolated_rate", iso / n),
                               ("bbox_fill", fill),
                               ("largest_cluster_rate", (sizes[0] if sizes else 0) / n),
-                              ("palette_size", len(colours))):
+                              ("colours_used", len(colours))):
             msg = calibration.outside(metric, value, generation=gen)
             if msg:
                 found.append((calibration.how_far(metric, value, generation=gen), msg))
@@ -532,7 +578,7 @@ def judge(image, *, generation: str | None = None) -> Report:
 
     return Report(
         width=w, height=h, opaque=len(coords),
-        palette_size=len(colours),
+        colours_used=len(colours),
         pixel_scale=runs.gcd,
         run_longest=runs.longest,
         run_modal=runs.modal,

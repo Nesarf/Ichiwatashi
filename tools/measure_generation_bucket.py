@@ -44,8 +44,8 @@ for m in BUCKET_METRICS:
 
 print()
 print("=== and the one this bucket cannot supply ===")
-print("palette_size: median %.1f here, but it is not stable on this generation -- 92.5%% of sprites"
-      % pct([float(r.palette_size) for r in rows], .5))
+print("colours_used: median %.1f here, but it is not stable on this generation -- 92.5%% of sprites"
+      % pct([float(r.colours_used) for r in rows], .5))
 print("  change value when decoded with a different palette from the same character's set, with a")
 print("  median spread of 27 on a median of 44.5. A threshold derived from one palette per sprite")
 print("  would be a threshold derived from an arbitrary choice, so it is left out of the bucket.")

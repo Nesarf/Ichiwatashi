@@ -35,7 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from ichiwatashi import calibration as C          # noqa: E402
 from ichiwatashi.judge import judge               # noqa: E402
 
-METRICS = ("palette_size", "isolated_rate", "outline_variation", "bbox_fill",
+METRICS = ("colours_used", "isolated_rate", "outline_variation", "bbox_fill",
            "largest_cluster_rate", "dither_pixels")
 
 SUFFIXES = (".png", ".gif", ".bmp", ".webp")

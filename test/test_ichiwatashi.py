@@ -34,7 +34,7 @@ class TestJudge(unittest.TestCase):
         """A full rectangle is the degenerate case: one cluster, a full bounding box, no outline."""
         im = flat((16, 16))
         r = judge_fn(im)
-        self.assertEqual(r.palette_size, 1)
+        self.assertEqual(r.colours_used, 1)
         self.assertEqual(r.clusters, 1)
         self.assertAlmostEqual(r.bbox_fill, 1.0, places=2)
         self.assertEqual(r.outline_variation, 0.0)
@@ -296,7 +296,7 @@ class TestSilhouette(unittest.TestCase):
 class TestGenerationBuckets(unittest.TestCase):
     """A single reference table judged a second generation of correct work and flagged all of it.
 
-    TH123 and TH155 are different populations: `palette_size` has a median of 26 in one and 43 in
+    TH123 and TH155 are different populations: `colours_used` has a median of 26 in one and 43 in
     the other, and `outline_variation` 0.726 against 0.004. Measured end to end over 160 real TH155
     sprites, judging them with the TH123 table raised a reference note on **80 of them (50%)**; with
     their own table it is **8 (5%)**. So the bucket is not bookkeeping, it is the difference between
@@ -316,9 +316,9 @@ class TestGenerationBuckets(unittest.TestCase):
     def test_the_same_value_gets_different_verdicts_in_the_two_buckets(self):
         """The regression this whole structure exists for, stated as one value and two answers."""
         from ichiwatashi import calibration as C
-        # a palette_size of 70 is far above TH123's band and simply not a metric for TH155
-        self.assertIsNotNone(C.outside("palette_size", 70.0, generation="th105/th123"))
-        self.assertIsNone(C.outside("palette_size", 70.0, generation="th155"))
+        # a colours_used of 70 is far above TH123's band and simply not a metric for TH155
+        self.assertIsNotNone(C.outside("colours_used", 70.0, generation="th105/th123"))
+        self.assertIsNone(C.outside("colours_used", 70.0, generation="th155"))
         # a bbox_fill of 0.85 is above TH123's band and inside TH155's
         self.assertIsNotNone(C.outside("bbox_fill", 0.85, generation="th105/th123"))
         self.assertIsNone(C.outside("bbox_fill", 0.85, generation="th155"))
@@ -330,17 +330,17 @@ class TestGenerationBuckets(unittest.TestCase):
         """Silence is right. Applying another era's thresholds is exactly what produced the
         false-positive generation, so an unrecognised name must not fall back to the default."""
         from ichiwatashi import calibration as C
-        self.assertIsNone(C.outside("palette_size", 70.0, generation="gba-era"))
+        self.assertIsNone(C.outside("colours_used", 70.0, generation="gba-era"))
         self.assertIsNone(C.outside("bbox_fill", 0.85, generation="gba-era"))
         self.assertEqual(C.how_far("bbox_fill", 0.85, generation="gba-era"), 0.0)
 
-    def test_palette_size_is_absent_from_the_th155_bucket_on_purpose(self):
+    def test_colours_used_is_absent_from_the_th155_bucket_on_purpose(self):
         """It is not a property of those drawings: the palettes are interchangeable within a
         character, and 92.5% of sprites change colour count when decoded with another member of the
         set. A threshold derived from one palette per sprite would be derived from a coin toss."""
         from ichiwatashi import calibration as C
-        self.assertNotIn("palette_size", C.REFERENCE_BY_GENERATION["th155"])
-        self.assertIn("palette_size", C.REFERENCE_BY_GENERATION["th105/th123"])
+        self.assertNotIn("colours_used", C.REFERENCE_BY_GENERATION["th155"])
+        self.assertIn("colours_used", C.REFERENCE_BY_GENERATION["th105/th123"])
 
     def test_both_buckets_record_where_their_numbers_came_from(self):
         """A threshold a reader cannot trace is an opinion."""
@@ -480,6 +480,79 @@ class TestShade(unittest.TestCase):
         self.assertLess(coverage[-1], coverage[0],
                         "coverage does not fall down the form, so the band is spreading into it: %s"
                         % [round(x, 2) for x in coverage])
+
+
+class TestIndexedColourCounts(unittest.TestCase):
+    """Three legitimate answers to "how many colours", and the old name hid which one was meant.
+
+    `palette_size` described the palette's *defined* slots. The code counted distinct RGB values
+    among the drawn pixels -- on an indexed source, the slots the drawing *references*, once the
+    palette has collapsed them. Measured on TH155, that is not a pedantic distinction: **142 of 200
+    sprites use fewer distinct colours than indices**, with gaps up to 11 slots, and a TFPA palette
+    declares 256 slots of which only about 70 are distinct.
+
+    `judge` is handed RGBA and cannot make the distinction at all, which is why the count it produces
+    is now named for what it is and the indexed relationship is measured separately.
+    """
+
+    def test_the_three_counts_are_separate_quantities(self):
+        from ichiwatashi.judge import measure_indexed
+        # 256 declared slots, of which 4 are distinct colours
+        # Index 0 is the transparent slot -- that is the convention everywhere in this project, and
+        # the first two versions of this fixture got it wrong: one put a colour at 0, the other put a
+        # transparent entry *and* an opaque one on the same RGB triple, which made `colours_defined`
+        # count that triple twice.
+        # The first four slots are the interesting ones. Everything after them is padding, and the
+        # padding is one colour so that counting it is unambiguous -- three earlier versions of this
+        # fixture mis-counted by forgetting the padding, or by putting a colour where the transparent
+        # slot belongs, or by having a transparent entry and an opaque one share an RGB triple.
+        palette = [(0, 0, 0, 0), (10, 20, 30, 255), (40, 50, 60, 255), (10, 20, 30, 255)]
+        palette += [(200, 200, 200, 255)] * 252
+        # the drawing uses indices 1, 2 and 3; nothing uses 0
+        indices = [1] * 5 + [2] * 5 + [3] * 5
+        m = measure_indexed(indices, palette)
+        self.assertEqual(m["slots_defined"], 256)
+        # distinct RGB in the whole palette: transparent, 10/20/30, 40/50/60, and the padding colour
+        self.assertEqual(m["colours_defined"], 4)
+        self.assertEqual(m["slots_used"], 3)           # indices 1, 2, 3
+        self.assertEqual(m["colours_used"], 2)         # index 3 repeats index 1's colour
+        self.assertAlmostEqual(m["used_duplicate_share"], 1 - 2 / 3, places=3)
+
+    def test_a_duplicate_slot_inside_the_used_range_is_visible(self):
+        """The relation 71% of real TH155 sprites are in. Two indices, one colour: any RGBA path
+        reports one colour and cannot say that two slots were spent on it."""
+        from ichiwatashi.judge import measure_indexed
+        palette = [(0, 0, 0, 0), (40, 50, 60, 255), (10, 20, 30, 255), (10, 20, 30, 255)]
+        indices = [1] * 4 + [2] * 4 + [3] * 4      # index 0 transparent, unused
+        m = measure_indexed(indices, palette)
+        self.assertEqual(m["slots_used"], 3)        # 1, 2, 3
+        self.assertEqual(m["colours_used"], 2)      # 2 and 3 are the same colour
+        self.assertAlmostEqual(m["used_duplicate_share"], 1 - 2 / 3, places=3)
+
+    def test_transparency_is_a_slot_but_not_a_colour(self):
+        """Index 0 is the transparent one throughout this project, so it counts as a slot the drawing
+        references only if it is drawn -- and it never is. Counting it would inflate every sprite."""
+        from ichiwatashi.judge import measure_indexed
+        palette = [(0, 0, 0, 0), (10, 20, 30, 255)]
+        m = measure_indexed([0] * 100 + [1] * 3, palette)
+        self.assertEqual(m["slots_used"], 1)
+        self.assertEqual(m["colours_used"], 1)
+
+    def test_judge_reports_what_it_can_see_and_the_field_is_named_for_it(self):
+        """`colours_used` on an RGBA report is distinct RGB among drawn pixels. It is the same number
+        an indexed measurement would give for `colours_used`, and it is *not* the palette's size --
+        which is what the old name claimed."""
+        im = Image.new("RGBA", (12, 12), (0, 0, 0, 0))
+        px = im.load()
+        for y in range(2, 10):
+            for x in range(2, 10):
+                px[x, y] = (10, 20, 30, 255)
+        for x in range(2, 10):
+            px[x, 5] = (40, 50, 60, 255)
+        r = judge_fn(im)
+        self.assertEqual(r.colours_used, 2)
+        self.assertFalse(hasattr(r, "palette_size"),
+                         "the old name is deliberately gone: it described something else")
 
 
 class TestPalette(unittest.TestCase):
@@ -714,14 +787,14 @@ class TestCalibration(unittest.TestCase):
         px = im.load()
         import colorsys
         colours = []
-        for i in range(int(C.REFERENCE["palette_size"].median)):
+        for i in range(int(C.REFERENCE["colours_used"].median)):
             r, g, b = colorsys.hsv_to_rgb(i / 26.0, 0.7, 0.8)
             colours.append((int(r * 255), int(g * 255), int(b * 255), 255))
         for y in range(6, 58):
             for x in range(6, 58):
                 px[x, y] = colours[(x * 3 + y * 5) % len(colours)]
         r = judge(im)
-        self.assertFalse(any("palette_size" in n for n in r.notes),
+        self.assertFalse(any("colours_used" in n for n in r.notes),
                          "a sprite at the reference palette size was flagged: %s" % r.notes)
 
 
