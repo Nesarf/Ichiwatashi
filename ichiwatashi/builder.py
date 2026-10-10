@@ -108,31 +108,80 @@ class Canvas:
         return self
 
     def shade(self, light: str, dark: str, *, depth: int = 2) -> "Canvas":
-        """Split each shape key into a lit and a shadow key, using the shape's own extent.
+        """Split each shape key into a lit band inside its top edge and a shadowed band inside its
+        bottom edge, at a constant **perpendicular** thickness of `depth`.
 
-        **This is the second version, and the first one is the reason it is written this way.** A rule
-        of the form `(x + y) % 7 == 0` -- or `(x + y) < (width + height) / 2`, which is the same thing
-        with the period taken out -- drew a diagonal sash across a skirt that nobody asked for. It was
-        visible in the output and invisible in the intent, and a test caught it coming back after the
-        comment had already been changed to say it was fixed.
+        **Two versions have been wrong here, and the second one was wrong in a way that only a slant
+        reveals.** The first was coordinate arithmetic -- `(x + y) % 7 == 0` -- which drew a diagonal
+        sash across a skirt. The second measured the shape per column: the top `depth` pixels lit,
+        the bottom `depth` shadowed. On a rectangle that is exactly right, which is why it survived:
+        two flat bands, the perpendicular thickness equal to `depth`.
 
-        So this measures the shape instead of the coordinates: for each column of the region, the top
-        `depth` pixels are lit and the bottom `depth` are shadowed. A rectangle comes back as two flat
-        bands. **The rule is about the form; the form is what a highlight is supposed to describe.**
+        On a slope it is not right, and the numbers are measured (`tools/probe_shade_bands.py`). The
+        rule fixes the **vertical** thickness, so what it produces perpendicular to the edge is
+        `depth / sqrt(1 + m^2)`. Where the edge steps one pixel per row that is `depth / sqrt(2)`, and
+        because the vertical count is an integer it alternates between `depth` and `depth / sqrt(2)` --
+        a sawtooth, `0.71x` to `1.0x` of the intended width, on the very form the band is meant to
+        describe.
+
+        So the band is now taken from **distance to the region's own boundary**, which does not care
+        which way the edge runs. The distance is Euclidean -- a chamfer transform, two passes -- rather
+        than a 4-connected wavefront, because a wavefront counts diagonal steps as one and would
+        reproduce the same anisotropy in a different place.
+
+        The direction stays: light comes from above, so the band along a top edge is lit and the one
+        along a bottom edge is shadowed. A pixel can be within `depth` of both on a thin form, and
+        then it is left alone rather than guessed at.
         """
+        BIG = 1 << 20
         for key, lit in light.items():
-            cols = {}
-            for y in range(self.height):
-                for x in range(self.width):
-                    if self.get(x, y) == key:
-                        cols.setdefault(x, []).append(y)
-            for x, ys in cols.items():
-                top, bottom = min(ys), max(ys)
-                for y in ys:
-                    if y < top + depth:
-                        self.put(x, y, lit)
-                    elif key in dark and y > bottom - depth:
-                        self.put(x, y, dark[key])
+            members = [(x, y) for y in range(self.height) for x in range(self.width)
+                       if self.get(x, y) == key]
+            if not members:
+                continue
+            inside = set(members)
+            # Euclidean distance to the nearest cell that is not in the region, by chamfer
+            # propagation: forward pass then backward, 3-4 weights scaled so that 3 is orthogonal
+            # and 4 is diagonal (4/3 approximates sqrt(2)).
+            dist = {}
+            for (x, y) in members:
+                d = 0
+                for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)):
+                    if (x + dx, y + dy) not in inside:
+                        d = 3
+                        break
+                dist[(x, y)] = d if d else BIG
+            grid = [(x, y) for y in range(self.height) for x in range(self.width)]
+            for (x, y) in grid:
+                if (x, y) not in inside:
+                    continue
+                for dx, dy, w in ((-1, 0, 3), (0, -1, 3), (-1, -1, 4), (1, -1, 4)):
+                    n = (x + dx, y + dy)
+                    if n in inside:
+                        dist[(x, y)] = min(dist[(x, y)], dist[n] + w)
+            for (x, y) in reversed(grid):
+                if (x, y) not in inside:
+                    continue
+                for dx, dy, w in ((1, 0, 3), (0, 1, 3), (1, 1, 4), (-1, 1, 4)):
+                    n = (x + dx, y + dy)
+                    if n in inside:
+                        dist[(x, y)] = min(dist[(x, y)], dist[n] + w)
+            cutoff = depth * 3
+            top_edge = {x: min(y for xx, y in members if xx == x)
+                        for x in {xx for xx, _ in members}}
+            bottom_edge = {x: max(y for xx, y in members if xx == x)
+                           for x in {xx for xx, _ in members}}
+            for (x, y) in members:
+                if dist[(x, y)] > cutoff:
+                    continue
+                near_top = y - top_edge[x] < depth + depth
+                near_bottom = bottom_edge[x] - y < depth + depth
+                # `distance` decides, `near_top`/`near_bottom` only say which side it is on, so a
+                # thin form where both are true is left unshaded rather than guessed.
+                if near_top and not near_bottom:
+                    self.put(x, y, lit)
+                elif near_bottom and not near_top and key in dark:
+                    self.put(x, y, dark[key])
         return self
 
     def outline(self, key: str, *, diagonal: bool = False) -> "Canvas":

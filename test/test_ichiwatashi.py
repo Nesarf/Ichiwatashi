@@ -368,6 +368,120 @@ class TestGenerationBuckets(unittest.TestCase):
                          "the second call was judged with the first generation's table: %s" % b.notes)
 
 
+class TestShade(unittest.TestCase):
+    """`shade` bands a form by distance to its own boundary, at a constant perpendicular thickness.
+
+    **Two rules were wrong before this one, and the second survived because a rectangle hides it.**
+    The first was coordinate arithmetic -- `(x + y) % 7 == 0` -- which drew a diagonal sash. The
+    second measured the shape per column and set the top `depth` pixels lit. On a rectangle that is
+    exactly right, which is why nobody caught it: two flat bands, perpendicular thickness equal to
+    `depth`. On a slope it fixes the wrong quantity, so the perpendicular thickness becomes
+    `depth / sqrt(1 + m^2)` and, because the vertical count is an integer, sawtooths between
+    `depth` and `depth / sqrt(2)` -- measured 0.71x to 1.0x of the intended width.
+
+    The perpendicular thickness is what these tests assert, because it is the number that is only
+    constant when the band actually follows the form.
+    """
+
+    @staticmethod
+    def _perp_thickness(c):
+        """Perpendicular thickness of the lit band per row, with that row's edge step."""
+        out = []
+        prev_edge = None
+        for row in c.rows():
+            lit = [x for x, ch in enumerate(row) if ch == "l"]
+            filled = [x for x, ch in enumerate(row) if ch in ("b", "l", "d")]
+            if not lit or not filled:
+                prev_edge = None
+                continue
+            edge = min(filled)
+            step = abs(edge - prev_edge) if prev_edge is not None else 0
+            out.append(len(lit) / (1 + step * step) ** 0.5)
+            prev_edge = edge
+        return out
+
+    def test_a_rectangle_comes_back_as_two_flat_bands(self):
+        """The control. Every earlier rule got this right, so it cannot be the whole test -- but a
+        rule that broke it would be worse than the one being replaced."""
+        c = B.Canvas(24, 16)
+        c.rect(4, 2, 19, 13, key="b")
+        c.shade({"b": "l"}, {"b": "d"}, depth=2)
+        rows = c.rows()
+        self.assertEqual(rows[2], "....llllllllllllllll....")
+        self.assertEqual(rows[3], "....llllllllllllllll....")
+        self.assertEqual(rows[12], "....dddddddddddddddd....")
+        self.assertEqual(rows[13], "....dddddddddddddddd....")
+        # the vertical sides are banded too, which the per-column rule never did -- it lit only
+        # the top of every column, so the left and right edges had no highlight at all
+        self.assertEqual(rows[4], "....llbbbbbbbbbbbbll....")
+        self.assertEqual(rows[10], "....ddbbbbbbbbbbbbdd....")
+
+    def test_a_sloped_form_gets_a_band_of_constant_perpendicular_width(self):
+        """The regression. On a 45-degree edge the old rule produced a sawtooth between 1.0 and 2.0
+        for `depth=2`; the band must now hold its width. This test fails against the per-column
+        rule, which is what makes it a regression test rather than a description."""
+        c = B.Canvas(40, 26)
+        c.cone(3, 22, 4, 30, key="b")
+        c.shade({"b": "l"}, {"b": "d"}, depth=2)
+        perp = self._perp_thickness(c)
+        self.assertGreater(len(perp), 8, "fixture too small to say anything")
+        spread = max(perp) - min(perp)
+        self.assertLess(spread, 1.0,
+                        "the band's perpendicular width wobbles by %.2f: %s" % (spread, perp))
+        self.assertGreater(min(perp), 2.0, "the band is thinner than the step it came from")
+
+    def test_a_short_form_where_both_bands_meet_is_left_alone(self):
+        """The guard. A form thin enough that the top and bottom bands overlap has no correct answer,
+        so pixels within range of both are not shaded rather than guessed at."""
+        c = B.Canvas(20, 10)
+        c.rect(4, 3, 15, 6, key="b")
+        c.shade({"b": "l"}, {"b": "d"}, depth=2)
+        mid = c.rows()[5]
+        self.assertIn("b", mid, "a four-pixel-tall form was shaded solid: %r" % mid)
+
+    def test_light_comes_from_above(self):
+        """The direction the rule has always had, kept: a band along a top edge is lit and one along
+        a bottom edge is shadowed, so the sign of the shading is not an accident of the geometry."""
+        c = B.Canvas(24, 16)
+        c.disc(12, 8, 6, key="b")
+        c.shade({"b": "l"}, {"b": "d"}, depth=1)
+        rows = c.rows()
+        first = next(y for y, r in enumerate(rows) if "l" in r)
+        last = max(y for y, r in enumerate(rows) if "d" in r)
+        self.assertLess(first, 8, "the lit band is not on top")
+        self.assertGreater(last, 8, "the shadowed band is not on the bottom")
+
+    def test_the_band_follows_a_slope_rather_than_marching_sideways(self):
+        """The failure mode the very first version had, asserted by shape: on a cone the lit band
+        must stay a rim near the apex rather than crossing the form.
+
+        Measured as the lit band's horizontal span against the form's own span, row by row: a band
+        that marches sideways covers more of each row the further down it goes.
+        """
+        c = B.Canvas(40, 26)
+        c.cone(3, 22, 4, 30, key="b")
+        c.shade({"b": "l"}, {"b": "d"}, depth=2)
+        coverage = []
+        for row in c.rows():
+            filled = [x for x, ch in enumerate(row) if ch in ("b", "l", "d")]
+            lit = [x for x, ch in enumerate(row) if ch == "l"]
+            # Only rows with room for a band on both sides. At the apex the form is two or three
+            # pixels wide and the band legitimately *is* the whole row, so including it would
+            # measure the fixture rather than the rule.
+            if len(filled) >= 8 and lit:
+                coverage.append(len(lit) / len(filled))
+        self.assertGreater(len(coverage), 6, "fixture too small to say anything")
+        self.assertLess(max(coverage), 0.9,
+                        "the lit band covers %.0f%% of a row, so it is a sash and not a rim"
+                        % (100 * max(coverage)))
+        # The shape of a rim rather than a sash: the band's pixel width is roughly constant while
+        # the rows get wider, so its share of a row *falls* down the form. A band marching sideways
+        # would do the opposite and approach the whole row, which is what the bound above catches.
+        self.assertLess(coverage[-1], coverage[0],
+                        "coverage does not fall down the form, so the band is spreading into it: %s"
+                        % [round(x, 2) for x in coverage])
+
+
 class TestPalette(unittest.TestCase):
 
     def test_merging_collapses_compression_noise(self):
