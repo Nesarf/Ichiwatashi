@@ -14,7 +14,7 @@ attached.
 """
 from __future__ import annotations
 
-from collections import Counter
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from math import gcd
 from functools import reduce
@@ -230,31 +230,92 @@ def _clusters(im, coords):
 
 
 def _outline(im, coords):
-    """How much the outline changes with what it borders.
+    """Two separate things about the outline, because one number could not carry both.
 
-    **This was the second metric to be corrected, and it was inverted.** The obvious reading is
-    "an outline of one consistent colour is disciplined". Pointed at a known-good sprite it returned
-    0.338 against 0.991 for a hand attempt -- and the good sprite is right. Commercial pixel art
-    varies its outline with the local colour, so hair gets a cool outline and cloth a warm one; a
-    single flat outline is the beginner's move.
+    **The history here is a correction on top of a correction.** The first version returned the share
+    of border pixels differing from the most common border colour, and read it as discipline: flat
+    outline good, varied outline sloppy. Pointed at known-good art that was inverted -- commercial
+    sprites vary their outline with the local colour. So it was flipped to "higher is more work".
+    That reading is still wrong, and this is the measurement that shows it.
 
-    So this returns the *variation*: the share of border pixels whose colour differs from the most
-    common border colour. Higher means the outline is doing more work. A flat outline scores near 0.
+    Pointed at 161 real TH155 sprites the median of that number is 0.003, and broken out per
+    character it is 0.000 / 0.055 / 0.000 / 0.041 with the count above 0.30 running 3 / 15 / 0 / 1.
+    Same generation, same pipeline, same artists. **So it is not measuring a drawing convention at
+    all -- it is measuring how many colours that character's palette contains.** Futo has several
+    costume colours and scores high; Hijiri is dressed in white and scores exactly 0. A flat outline
+    is not a beginner's move in TH155, it is what the palette does.
+
+    And the number cannot do the job it was given, because two different drawings produce the same
+    value: a drawing whose outline follows the local colour, and a drawing whose outline pixels are
+    random. Measured on the same sprites with the outline rewritten three ways:
+
+        outline style        colours   variation   predictability
+        one flat colour            1       0.000            1.000
+        varies with the fill      30       0.816            1.000
+        random, 6-colour pool      6       0.806            0.256
+        random, any colour       880       0.999            0.035
+
+    So this returns both: `variation` (how much the outline changes) and `predictability` (how much
+    the fill colour predicts the outline colour). Only the pair distinguishes the three cases, and
+    neither is a score -- which one is desirable depends on the art direction, not on the metric.
     """
     px = im.load()
     w, h = im.size
-    border = []
+    border = []          # (fill colour, outline colour), for the note
+    ocol = []            # outline colours only
     for x, y in coords:
         for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
             a, b = x + dx, y + dy
             if not (0 <= a < w and 0 <= b < h) or px[a, b][3] == 0:
-                border.append(px[x, y][:3])
+                ocol.append(px[x, y][:3])
+                # the inward neighbour is the fill this outline pixel wraps; an outline on the
+                # outer edge of a one-pixel shape has none, and contributes variation only
+                i, j = x - dx, y - dy
+                if 0 <= i < w and 0 <= j < h and px[i, j][3] > 0:
+                    border.append((px[i, j][:3], px[x, y][:3]))
                 break
-    if not border:
-        return 0.0, None, 0
-    counts = Counter(border)
+    if not ocol:
+        return 0.0, None, 0, 0.0, 0
+    counts = Counter(ocol)
     most, n_most = counts.most_common(1)[0]
-    return round(1 - n_most / len(border), 3), most, len(border)
+    variation = round(1 - n_most / len(ocol), 3)
+    if not border:
+        return variation, most, len(ocol), 0.0, 0
+    by_fill = defaultdict(Counter)
+    for fill, out in border:
+        by_fill[fill][out] += 1
+    hit = sum(c.most_common(1)[0][1] for c in by_fill.values())
+    total = sum(sum(c.values()) for c in by_fill.values())
+    return (variation, most, len(ocol), round(hit / total, 3), len(counts))
+
+
+def outline_style(variation: float, predictability: float, colours: int) -> str:
+    """Name the outline's style, or say the evidence is too thin. Thresholds are measured.
+
+    From rewriting the outline of 164 real TH155 sprites three ways and reading both numbers:
+
+        one flat colour           colours  1    variation 0.000   predictability 1.000
+        varies with the fill      colours 30    variation 0.820   predictability 0.886
+        random 6-colour pool      colours  6    variation 0.806   predictability 0.266
+
+    A flat outline is `variation ~ 0`; "systematic" and "noisy" both sit high on variation and are
+    told apart by predictability, 0.886 against 0.266. So the pair separates all three, and neither
+    number alone does.
+
+    **This is deliberately not a grade.** Which style is right depends on the art direction: all 161
+    real TH155 sprites measured sit at variation ~0 (flat) with predictability ~1.0, and the
+    reference generation sits above 0.5. Calling either one better is what made the earlier version
+    report a whole generation of correct work as defective.
+    """
+    if colours < 2:
+        return "flat"
+    if variation < 0.30:
+        return "flat"
+    if predictability >= 0.80:
+        return "systematic"
+    if predictability <= 0.50:
+        return "noisy"
+    return "mixed"
 
 
 def _dither(im, coords, w, h):
@@ -304,6 +365,8 @@ class Report:
     largest_cluster_rate: float
     median_cluster: float
     outline_variation: float
+    outline_predictability: float
+    outline_colours: int
     outline_color: tuple | None
     border_pixels: int
     dither_pixels: int
@@ -322,7 +385,7 @@ def judge(image) -> Report:
     colours = Counter(px[x, y][:3] for x, y in coords)
     sizes = _clusters(im, coords)
     iso = _isolated(im, coords)
-    var, ocol, nborder = _outline(im, coords)
+    var, ocol, nborder, pred, ncols = _outline(im, coords)
     dith = _dither(im, coords, w, h)
     runs = _run_stats(im, coords)
 
@@ -385,10 +448,19 @@ def judge(image) -> Report:
         # a flat outline is a shape of the distribution rather than an outlying value, and the
         # combination of a high isolated rate with large clusters is what noise looks like -- detail
         # has the same rate but comes with many small clusters.
-        if var < 0.3 and nborder > 20:
-            notes.append("the outline is nearly one flat colour (variation %.2f against a reference "
-                         "median of %.2f); known-good sprites vary it with the local colour"
-                         % (var, calibration.REFERENCE["outline_variation"].median))
+        # **This note used to say the flat outline was a fault, and it fired on 161 of 161 real
+        # TH155 sprites.** It read "known-good sprites vary it with the local colour" against a
+        # reference median of 0.73 from TH123. Measuring the two generations with the same pipeline:
+        # TH123 sits above 0.5, TH155 sits at 0.003 and is entirely flat, and both are correct work.
+        # So the note now names the style and prints the evidence instead of grading it -- which is
+        # what a measurement is allowed to do when the convention is a property of the era.
+        if var >= 0.30 and nborder > 20:
+            style = outline_style(var, pred, ncols)
+            if style == "noisy":
+                notes.append("the outline uses %d colours at %.3f variation, but the fill predicts "
+                             "its colour only %.0f%% of the time -- that is close to one outline "
+                             "colour per pixel rather than a palette"
+                             % (ncols, var, 100 * pred))
         if iso and iso / n > 0.05 and median_cluster > 4:
             notes.append("isolated pixels are %.1f%% and the colour clusters are large (median %d "
                          "pixels) -- that combination is stray single pixels or a procedural pattern "
@@ -406,7 +478,8 @@ def judge(image) -> Report:
         clusters=len(sizes), largest_cluster=sizes[0] if sizes else 0,
         largest_cluster_rate=round((sizes[0] if sizes else 0) / n, 4),
         median_cluster=median_cluster,
-        outline_variation=var, outline_color=ocol, border_pixels=nborder,
+        outline_variation=var, outline_predictability=pred,
+        outline_colours=ncols, outline_color=ocol, border_pixels=nborder,
         dither_pixels=dith,
         bbox=bbox, bbox_fill=fill,
         notes=notes,

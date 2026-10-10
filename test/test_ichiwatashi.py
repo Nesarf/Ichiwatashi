@@ -37,21 +37,71 @@ class TestJudge(unittest.TestCase):
         self.assertAlmostEqual(r.bbox_fill, 1.0, places=2)
         self.assertEqual(r.outline_variation, 0.0)
 
-    def test_a_flat_outline_raises_a_note_and_a_varied_one_does_not(self):
-        """The rule that was inverted. Measured: a known-good sprite varies its outline by 0.662, a
-        hand attempt by 0.088 -- and the known-good value is the healthy one."""
+    def test_a_flat_outline_is_no_longer_called_a_fault(self):
+        """**This replaces a test that asserted the opposite, and the replacement is the point.**
+
+        The old test asserted that a flat outline raises a note saying known-good sprites vary their
+        outline with the local colour. Pointed at 161 real TH155 sprites, *all* of them were flat
+        (median variation 0.003) and every one raised that note. Measuring the two generations with
+        one pipeline: TH123 sits above 0.5, TH155 sits at ~0, and both are correct work.
+
+        So the outline style is now reported as a style, not a grade. A flat outline raises nothing.
+        """
         im = Image.new("RGBA", (16, 16), (0, 0, 0, 0))
         px = im.load()
         for y in range(3, 13):
             for x in range(3, 13):
-                px[x, y] = (200, 200, 200, 255)          # one block, one outline colour
+                px[x, y] = (200, 200, 200, 255)
         for y in range(3, 13):
             for x in range(3, 13):
                 if x in (3, 12) or y in (3, 12):
                     px[x, y] = (20, 20, 20, 255)
-        r_flat = judge_fn(im)
-        self.assertLess(r_flat.outline_variation, 0.1)
-        self.assertTrue(any("flat" in n for n in r_flat.notes))
+        r = judge_fn(im)
+        self.assertLess(r.outline_variation, 0.1)
+        self.assertEqual(r.outline_colours, 1)
+        self.assertEqual(r.outline_predictability, 1.0)
+        self.assertFalse(any("outline" in n for n in r.notes),
+                         "a flat outline is a style, not a fault: %s" % r.notes)
+
+    def test_outline_style_separates_systematic_from_noisy(self):
+        """The two quantities, on the measurement that motivated them.
+
+        Rewriting one real sprite's outline three ways: a flat outline scores ~0 variation, while
+        "varies with the fill" and "random" both score ~0.8 and are told apart only by
+        predictability (0.886 against 0.266). One number could not do this -- that is why both exist.
+        """
+        from ichiwatashi.judge import outline_style
+        # flat
+        self.assertEqual(outline_style(0.00, 1.00, 1), "flat")
+        # systematic: the fill predicts the outline
+        self.assertEqual(outline_style(0.82, 0.89, 30), "systematic")
+        # noisy: same variation, unpredictable
+        self.assertEqual(outline_style(0.81, 0.27, 6), "noisy")
+        # the same variation with no predictability signal is not called either
+        self.assertEqual(outline_style(0.81, 0.65, 12), "mixed")
+
+        # and end to end: a systematic outline is recognised as such
+        im = Image.new("RGBA", (20, 20), (0, 0, 0, 0))
+        px = im.load()
+        fills = [(200, 60, 60, 255), (60, 200, 60, 255), (60, 60, 200, 255), (200, 200, 60, 255)]
+        for k, f in enumerate(fills):
+            x0 = 4 + k * 3
+            for y in range(5, 15):
+                for x in range(x0, x0 + 3):
+                    px[x, y] = f
+        # outline each fill with a darkened version of itself, which is the systematic convention
+        for k, f in enumerate(fills):
+            x0 = 4 + k * 3
+            dark = (f[0] // 3, f[1] // 3, f[2] // 3, 255)
+            for y in range(5, 15):
+                px[x0, y] = dark
+                px[x0 + 2, y] = dark
+            for x in range(x0, x0 + 3):
+                px[x, 5] = dark
+                px[x, 14] = dark
+        r = judge_fn(im)
+        self.assertGreaterEqual(r.outline_colours, 4)
+        self.assertGreater(r.outline_predictability, 0.8)
 
     def test_isolated_pixels_need_a_rate_and_a_cluster_shape_to_flag(self):
         """**This is the false positive that was found by pointing the judge at real art.**
