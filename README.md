@@ -17,11 +17,13 @@ falsified two of its own assumptions immediately:**
 | Assumption | What the measurement said |
 |---|---|
 | "Fewer isolated pixels is better" | A real 72×113 fighting-game frame had **10.1%** isolated pixels — 312 of them — against **1.35%** in a hand attempt. The good sprite looked worse **because the count was absolute and the sprites were different sizes.** As a rate the good sprite is *dirtier* still, and correctly so: at 21 colours across 546 clusters, those pixels **are the detail** — single-pixel highlights, eyes, cloth texture. So the metric needs a rate **and** a cluster shape to tell noise from detail, and a rate-only rule raises a false positive on known-good art. |
-| "One consistent outline colour is disciplined" | The good sprite scored **0.662** and the hand attempt **0.991** — and the good sprite is right. Commercial pixel art varies its outline with the local colour: hair gets a cool outline, cloth a warm one. **A single flat outline is the beginner's move.** The metric was inverted. |
+| "One consistent outline colour is disciplined" | The good sprite scored **0.662** and the hand attempt **0.991** — so the metric was inverted. **And then the inversion was wrong as well, which is the more useful half of the lesson.** Pointed at 161 real TH155 sprites that number has a median of **0.003** — they are *all* flat — while TH123 sits at 0.726. Two generations of correct work. So it was never measuring discipline: it was measuring **how many colours the character's palette has**, which is why one pipeline scored futo 0.055 and hijiri exactly 0.000. It is now two quantities, `outline_variation` and `outline_predictability`, and `outline_style()` names the style (flat / systematic / noisy) **without grading it**. `corpus/AESTHETICS.md` records the published technique this corresponds to — 「セルアウト」, where an outline is the body's own colour darkened, which is what a near-1.0 predictability means. |
 
 **Both of those would have been trained into a model as ground truth**, and neither is visible without
-a known-good sample to point at. That is the whole argument for this repository existing as a
-measuring tool first.
+a known-good sample to point at. **The second one shows the limit of that remedy too**: pointing the
+metric at good art is what revealed the inversion, and pointing it at a *second* generation of good art
+is what revealed that the inversion had only swapped which convention got called correct. One corpus is
+a sample of one art direction, so the reference is now keyed by generation — see `calibration.py`.
 
 ### And then the thresholds were measured rather than chosen
 
