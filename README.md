@@ -212,6 +212,40 @@ up 360 ms and 500 ms outliers sitting alone among 60–170 ms neighbours.
 
 ---
 
+## What this measures, and what it refuses to
+
+**The judge has a subject, and it now says so instead of printing numbers for anything.** A metric
+applied to something that does not have the property being measured returns *not applicable*, and
+nothing in the arithmetic distinguishes that from a clean result. Two cases made this a code change
+rather than a paragraph:
+
+- `silhouette_share` is **1.000** on a single-colour form. That reads as "a uniform edge" and means
+  nothing — every edge pixel is that colour by construction.
+- The whole metric set on a 5×7 bitmap font. Measured over all 58 glyphs of `volcano-separator`'s
+  self-drawn pixel font: `colours_used` **1** against a band of 16–37, `isolated_rate` **0.000**
+  against 0.074–0.160. Every glyph came back flagged as unlike any reference generation. A font and a
+  fighting sprite are not the same kind of object, and nothing had said so.
+  (`tools/probe_font_glyphs.py` is that measurement.)
+
+So an input whose **short side is under 24 px** is refused with exit code **2**, distinct from 1, which
+means "measured, and a note was raised". Those are different answers and a caller has to tell them
+apart.
+
+**The threshold is measured, not chosen.** The 160-sprite reference corpus has a smallest short side of
+**62 px** (p05 91, median 123), so 24 refuses a 7 px glyph by a factor of three while clipping nothing
+real — checked, not assumed: `TestScope::test_the_gate_clips_nothing_in_the_reference_corpus` runs the
+judge over the whole corpus and asserts none of it raises.
+
+**`--anyway` steps past the gate** and prints the numbers as uncalibrated. It exists for the case where
+the caller knows what they are measuring; it is not a way to make a warning go away, because there is no
+warning — there is a refusal, and overriding it is a decision the caller has to make on purpose.
+
+**What this deliberately does not do** is recognise "a font panel" or any other non-sprite subject. A
+screenshot of text is large, passes the gate, and still is not a sprite. A gate can catch the shapes
+there are measurements for; anything subtler is a stated limit rather than a silent pass.
+
+---
+
 ## What is deliberately not here
 
 **No model, and no training.** Most of what makes pixel art read as pixel art is countable from the

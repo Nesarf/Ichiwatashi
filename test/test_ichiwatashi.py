@@ -13,6 +13,29 @@ from pathlib import Path
 
 from PIL import Image
 
+from ichiwatashi.scope import MIN_SHORT_SIDE, OutOfScopeError
+
+
+def in_scope(size: int = MIN_SHORT_SIDE) -> int:
+    """A canvas side the judge will accept, for fixtures whose own subject is not the size gate.
+
+    **The fixtures used to be 8-20 px, and every one of them was a shape the judge was never meant to
+    measure.** They passed because nothing checked. `volcano-separator`'s 5x7 font is what made that
+    visible: `colours_used` 1 against a band of 16-37 and `isolated_rate` 0.000 against 0.074-0.160, so
+    all 58 glyphs came back flagged, and a fixture that small was in the same position without anyone
+    noticing. So these helpers exist to keep fixtures at or above the gate -- and the shapes below were
+    scaled with them, because enlarging a canvas without enlarging the drawing changes what is measured.
+    """
+    return max(size, MIN_SHORT_SIDE)
+
+
+def block_canvas(side: int = 30, *, pad: int = 6, bg=(0, 0, 0, 0)):
+    """A square canvas big enough to be measured, and the x-range the drawing should occupy."""
+    side = in_scope(side)
+    pad = max(pad, 2)
+    return Image.new("RGBA", (side, side), bg), pad, side - pad
+
+
 from ichiwatashi import builder as B
 from ichiwatashi import frames as F
 from ichiwatashi.judge import judge as judge_fn
@@ -25,6 +48,13 @@ def coords_note(r):
 
 
 def flat(size, colour=(0, 0, 0, 255)):
+    """A solid canvas, exactly the size asked for.
+
+    **Deliberately not floored to the judge's minimum.** It was, for one revision, and that broke a
+    frame test that needs a 12x20 canvas for its own reasons -- the floor belongs on the calls that
+    hand a drawing to `judge_fn`, not on a general image builder. Raising it here was a blunt fix that
+    moved the failure instead of removing it.
+    """
     return Image.new("RGBA", size, colour)
 
 
@@ -32,7 +62,7 @@ class TestJudge(unittest.TestCase):
 
     def test_a_sprite_that_is_one_block_is_reported_as_one(self):
         """A full rectangle is the degenerate case: one cluster, a full bounding box, no outline."""
-        im = flat((16, 16))
+        im = flat((in_scope(16), in_scope(16)))
         r = judge_fn(im)
         self.assertEqual(r.colours_used, 1)
         self.assertEqual(r.clusters, 1)
@@ -49,14 +79,15 @@ class TestJudge(unittest.TestCase):
 
         So the outline style is now reported as a style, not a grade. A flat outline raises nothing.
         """
-        im = Image.new("RGBA", (16, 16), (0, 0, 0, 0))
+        im = Image.new("RGBA", (in_scope(16), in_scope(16)), (0, 0, 0, 0))
         px = im.load()
-        for y in range(3, 13):
-            for x in range(3, 13):
+        lo, hi = 6, 24
+        for y in range(lo, hi):
+            for x in range(lo, hi):
                 px[x, y] = (200, 200, 200, 255)
-        for y in range(3, 13):
-            for x in range(3, 13):
-                if x in (3, 12) or y in (3, 12):
+        for y in range(lo, hi):
+            for x in range(lo, hi):
+                if x in (lo, hi - 1) or y in (lo, hi - 1):
                     px[x, y] = (20, 20, 20, 255)
         r = judge_fn(im)
         self.assertLess(r.outline_variation, 0.1)
@@ -82,25 +113,29 @@ class TestJudge(unittest.TestCase):
         # the same variation with no predictability signal is not called either
         self.assertEqual(outline_style(0.81, 0.65, 12), "mixed")
 
-        # and end to end: a systematic outline is recognised as such
-        im = Image.new("RGBA", (20, 20), (0, 0, 0, 0))
+        # 30x30 with four 3-wide bands 15 tall: the same shape at a size the judge accepts. The
+        # spacing, the band width and the outline rows all scale together -- a fixture that keeps 3 px
+        # bands on a larger canvas changes the outline-to-fill ratio the assertion depends on.
+        side = in_scope(30)
+        im = Image.new("RGBA", (side, side), (0, 0, 0, 0))
         px = im.load()
         fills = [(200, 60, 60, 255), (60, 200, 60, 255), (60, 60, 200, 255), (200, 200, 60, 255)]
+        top, bottom = 7, 22
         for k, f in enumerate(fills):
-            x0 = 4 + k * 3
-            for y in range(5, 15):
+            x0 = 6 + k * 5
+            for y in range(top, bottom + 1):
                 for x in range(x0, x0 + 3):
                     px[x, y] = f
         # outline each fill with a darkened version of itself, which is the systematic convention
         for k, f in enumerate(fills):
-            x0 = 4 + k * 3
+            x0 = 6 + k * 5
             dark = (f[0] // 3, f[1] // 3, f[2] // 3, 255)
-            for y in range(5, 15):
+            for y in range(top, bottom + 1):
                 px[x0, y] = dark
                 px[x0 + 2, y] = dark
             for x in range(x0, x0 + 3):
-                px[x, 5] = dark
-                px[x, 14] = dark
+                px[x, top] = dark
+                px[x, bottom] = dark
         r = judge_fn(im)
         self.assertGreaterEqual(r.outline_colours, 4)
         self.assertGreater(r.outline_predictability, 0.8)
@@ -128,11 +163,11 @@ class TestJudge(unittest.TestCase):
                          "fine detail is being diagnosed as noise: %s" % r.notes)
 
     def test_the_report_is_deterministic(self):
-        im = flat((8, 8), (10, 20, 30, 255))
+        im = flat((in_scope(8), in_scope(8)), (10, 20, 30, 255))
         self.assertEqual(judge_fn(im), judge_fn(im))
 
     def test_fully_transparent_does_not_divide_by_zero(self):
-        r = judge_fn(flat((8, 8), (0, 0, 0, 0)))
+        r = judge_fn(flat((in_scope(8), in_scope(8)), (0, 0, 0, 0)))
         self.assertEqual(r.opaque, 0)
         self.assertTrue(any("transparent" in n for n in r.notes))
 
@@ -356,10 +391,19 @@ class TestGenerationBuckets(unittest.TestCase):
 
     def test_judge_passes_the_generation_through(self):
         """The wiring, not just the table: `judge(..., generation=...)` has to reach `outside`."""
-        im = Image.new("RGBA", (16, 16), (0, 0, 0, 0))
+        # A 30x30 canvas, and the square is placed by the canvas rather than by hand -- `in_scope(16)`
+        # is 24, not 30, and writing to x=25 on a 24 px image is an IndexError that reads like a judge
+        # failure until you look at the traceback.
+        side = in_scope(30)
+        im = Image.new("RGBA", (side, side), (0, 0, 0, 0))
         px = im.load()
-        for y in range(2, 14):
-            for x in range(2, 14):
+        lo = side // 5
+        hi = side - lo
+        # A solid red square with no outline: `colours_used` 1 and a full bounding box put it outside
+        # both generations' bands, which is what this needs -- a fixture that fits every band would
+        # prove nothing about which table was used.
+        for y in range(lo, hi):
+            for x in range(lo, hi):
                 px[x, y] = (200, 60, 60, 255)
         a = judge_fn(im)
         b = judge_fn(im, generation="th155")
@@ -542,13 +586,17 @@ class TestIndexedColourCounts(unittest.TestCase):
         """`colours_used` on an RGBA report is distinct RGB among drawn pixels. It is the same number
         an indexed measurement would give for `colours_used`, and it is *not* the palette's size --
         which is what the old name claimed."""
-        im = Image.new("RGBA", (12, 12), (0, 0, 0, 0))
+        side = in_scope(30)
+        im = Image.new("RGBA", (side, side), (0, 0, 0, 0))
         px = im.load()
-        for y in range(2, 10):
-            for x in range(2, 10):
+        lo = side // 5
+        hi = side - lo
+        for y in range(lo, hi):
+            for x in range(lo, hi):
                 px[x, y] = (10, 20, 30, 255)
-        for x in range(2, 10):
-            px[x, 5] = (40, 50, 60, 255)
+        # one row inside the block carries the second colour, so the count is exactly 2
+        for x in range(lo, hi):
+            px[x, lo + 3] = (40, 50, 60, 255)
         r = judge_fn(im)
         self.assertEqual(r.colours_used, 2)
         self.assertFalse(hasattr(r, "palette_size"),
@@ -798,6 +846,78 @@ class TestCalibration(unittest.TestCase):
                          "a sprite at the reference palette size was flagged: %s" % r.notes)
 
 
+class TestScope(unittest.TestCase):
+    """The judge says what it is for, and refuses what it is not for.
+
+    **The failure this exists to stop is a metric returning `not applicable` in the shape of a result.**
+    Two cases are documented, and the second is what made it a code change rather than a paragraph:
+
+      * `silhouette_share` is 1.000 on a single-colour form, which reads as "a uniform edge" and means
+        nothing -- every edge pixel is that colour by construction.
+      * The whole metric set on a 5x7 bitmap font: `colours_used` 1 against a band of 16-37, and
+        `isolated_rate` 0.000 against 0.074-0.160, so **all 58 glyphs** of `volcano-separator`'s pixel
+        font came back flagged as unlike any reference generation. That is
+        `tools/probe_font_glyphs.py`.
+
+    The threshold is measured, not chosen: the 160-sprite reference corpus has a smallest short side of
+    62 px, so 24 refuses a 7 px glyph by a factor of three and clips nothing real.
+    """
+
+    def test_a_tiny_input_is_refused_rather_than_measured(self):
+        im = Image.new("RGBA", (7, 9), (0, 0, 0, 0))
+        with self.assertRaises(OutOfScopeError) as cm:
+            judge_fn(im)
+        # The message has to carry the numbers, or a refusal cannot be acted on
+        self.assertIn("7x9", str(cm.exception))
+        self.assertIn("62 px", str(cm.exception))
+        self.assertIn("--anyway", str(cm.exception))
+
+    def test_the_refusal_is_a_named_error_not_a_generic_one(self):
+        """Callers act on this differently -- the CLI turns it into exit code 2, which is distinct from
+        1, meaning "measured, and a note was raised". Those are different answers."""
+        from ichiwatashi.scope import OutOfScopeError as E
+        self.assertTrue(issubclass(E, ValueError))
+
+    def test_anyway_measures_it_and_that_is_the_callers_problem(self):
+        """The escape hatch, and it must actually work: a caller who knows what they are measuring gets
+        the numbers. What they must not get is the impression the reference calibrated them."""
+        im = Image.new("RGBA", (9, 9), (0, 0, 0, 0))
+        px = im.load()
+        for y in range(2, 7):
+            for x in range(2, 7):
+                px[x, y] = (10, 20, 30, 255)
+        r = judge_fn(im, anyway=True)
+        self.assertEqual(r.colours_used, 1)
+        self.assertEqual(r.width, 9)
+
+    def test_the_gate_clips_nothing_in_the_reference_corpus(self):
+        """The property that makes the threshold legitimate rather than convenient. This reads the real
+        corpus if it is on the machine, and skips loudly if it is not -- a silently skipped check is how
+        a fixture ends up below a floor without anyone noticing, which is what happened here."""
+        d = Path("E:/DaShaoHuo/downloads/ichiwatashi-corpus/th155")
+        if not d.is_dir():
+            self.skipTest("the TH155 corpus is not on this machine")
+        files = sorted(d.glob("*.png"))
+        self.assertGreater(len(files), 50, "too few sprites to make this claim")
+        smallest = None
+        for p in files:
+            with Image.open(p) as im:
+                size = im.size
+                if smallest is None or min(size) < smallest[0]:
+                    smallest = (min(size), p.name, size)
+                judge_fn(im.convert("RGBA"), generation="th155")   # must not raise
+        self.assertGreaterEqual(smallest[0], MIN_SHORT_SIDE,
+                                "the gate refuses real art: %s" % (smallest,))
+
+    def test_a_sequence_too_short_for_a_spread_is_refused(self):
+        """The same rule for motion. A drift spread over two frames is the difference between two
+        drawings, not a statement about motion."""
+        from ichiwatashi.scope import MIN_FRAMES_FOR_SPREAD, require_sequence
+        require_sequence(range(MIN_FRAMES_FOR_SPREAD))        # exactly the floor is fine
+        with self.assertRaises(OutOfScopeError):
+            require_sequence(range(MIN_FRAMES_FOR_SPREAD - 1))
+
+
 class TestPixelScale(unittest.TestCase):
     """`pixel_scale` had no reference row and no counterexample: it read 1 on all 120 TH123 sprites
     and on 640 TH155 sprite/palette combinations, so nothing had ever shown it *failing*.
@@ -842,18 +962,30 @@ class TestPixelScale(unittest.TestCase):
         Runs of many different lengths: the best divisibility over n=2..64 stays low (0.27-0.30 on
         real sprites, which is what random run lengths give), so nothing is reported.
         """
-        im = Image.new("RGBA", (40, 8), (0, 0, 0, 0))
+        # **Enlarged from 40x8, and that fixed a second problem besides the size gate.** At 40x8 this
+        # fixture produced about 64 runs against a measured floor of 100, so the run-count rule would
+        # have refused it anyway and the assertion below was passing for a reason other than the one it
+        # names. 80x24 with the pattern repeated and then broken gives several hundred runs, which is
+        # what makes it a test of the false-positive guard rather than of an empty input.
+        im = Image.new("RGBA", (80, 24), (0, 0, 0, 0))
         px = im.load()
-        for y in range(8):
+        pattern = ((3, (200, 40, 40, 255)), (5, (40, 200, 40, 255)),
+                   (2, (40, 40, 200, 255)), (7, (200, 200, 40, 255)),
+                   (4, (200, 40, 200, 255)), (3, (40, 200, 200, 255)),
+                   (9, (120, 60, 20, 255)), (4, (20, 120, 60, 255)), (6, (90, 90, 90, 255)))
+        for y in range(24):
             x = 0
-            for run, c in ((3, (200, 40, 40, 255)), (5, (40, 200, 40, 255)),
-                           (2, (40, 40, 200, 255)), (7, (200, 200, 40, 255)),
-                           (4, (200, 40, 200, 255)), (3, (40, 200, 200, 255)),
-                           (9, (120, 60, 20, 255)), (4, (20, 120, 60, 255))):
-                for i in range(run):
-                    if x + i < 40:
-                        px[x + i, y] = c
-                x += run
+            # the pattern repeats, and each row starts one colour later, so no single factor can
+            # divide every run length -- which is the property under test
+            seq = pattern[y % len(pattern):] + pattern[:y % len(pattern)]
+            while x < 80:
+                for run, c in seq:
+                    for i in range(run):
+                        if x + i < 80:
+                            px[x + i, y] = c
+                    x += run
+                    if x >= 80:
+                        break
         r = judge_fn(im)
         self.assertEqual(r.upscale, 0, "a hand drawing was reported as an upscale")
         self.assertFalse(any("multiple" in n for n in r.notes))
@@ -885,10 +1017,14 @@ class TestPixelScale(unittest.TestCase):
         ones. So the degradation is not random noise -- `gcd` silently becomes a divisor of the true
         factor, with nothing in the value to say so.
         """
+        # **cols/rows raised from 10 to 20 so the fixture clears the run-count floor as well as the
+        # size gate.** At 10x10 the grid held 100 runs, which is exactly the measured floor, so "the
+        # GCD degraded to a divisor of n" was being read off the minimum evidence it takes. 20x20 gives
+        # 400 runs: the same law, on a fixture with room to state it.
         law = {2: 2, 3: 3, 4: 2, 5: 1, 6: 2, 7: 1, 8: 2}
         for n, want in law.items():
             with self.subTest(n=n):
-                im = self._blocks(n, cols=10, rows=10)
+                im = self._blocks(n, cols=20, rows=20)
                 clean = judge_fn(im)
                 self.assertEqual(clean.pixel_scale, n, "a clean grid should read its own factor")
                 self.assertEqual(clean.upscale, n)
@@ -925,7 +1061,12 @@ class TestPixelScale(unittest.TestCase):
         average over, and it is preferable to a note that a reader has to learn to ignore.
         """
         small = self._blocks(2, cols=4, rows=4)          # 32 runs
-        r = judge_fn(small)
+        # `anyway=True`, and it is the honest use of that flag rather than a way round the gate: this
+        # fixture is *deliberately* below the run-count floor, which is the rule under test, and a
+        # drawing too small in runs is necessarily too small in pixels. The pixel-size gate is a
+        # separate rule with its own test; here the subject is silence at low evidence, so the gate is
+        # stepped past explicitly instead of being satisfied by a fixture that would defeat the test.
+        r = judge_fn(small, anyway=True)
         self.assertLess(len(_opaque(small)), 100)
         self.assertFalse(any("multiple" in n for n in r.notes),
                          "a 32x32 drawing should not get a unit-size claim: %s" % r.notes)

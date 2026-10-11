@@ -20,6 +20,7 @@ from math import gcd
 from functools import reduce
 
 from . import calibration
+from .scope import OutOfScopeError, require_in_scope  # noqa: F401  (re-exported for callers)
 
 __all__ = ["Report", "judge", "load_rgba"]
 
@@ -470,9 +471,20 @@ def measure_indexed(indices, palette_slots):
     }
 
 
-def judge(image, *, generation: str | None = None) -> Report:
-    """Measure one image. Deterministic: the same bytes always give the same report."""
+def judge(image, *, generation: str | None = None, anyway: bool = False) -> Report:
+    """Measure one image. Deterministic: the same bytes always give the same report.
+
+    **Refuses an input the reference has no subject for, rather than printing numbers about it.**
+    `scope.require_in_scope` raises unless `anyway=True`, and the reason is measured rather than
+    cautious: see `scope.py` and `tools/probe_font_glyphs.py`, where a 5x7 font put `colours_used` at 1
+    against a band of 16-37 and `isolated_rate` at 0.000 against 0.074-0.160, so all 58 of its glyphs
+    came back flagged. A metric applied to something that does not have the property being measured
+    returns *not applicable*, and nothing in the arithmetic says so -- the refusal has to come from
+    somewhere else, and this is that somewhere.
+    """
     im = load_rgba(image)
+    if not anyway:
+        require_in_scope(im)
     w, h = im.size
     coords = _opaque(im)
     px = im.load()

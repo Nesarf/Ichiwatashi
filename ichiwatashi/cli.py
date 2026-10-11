@@ -12,6 +12,7 @@ from pathlib import Path
 
 from . import calibration as C
 from .judge import outline_style
+from .scope import MIN_SHORT_SIDE as SCOPE_MIN
 
 
 def _fmt_report(r, name):
@@ -49,6 +50,8 @@ def _fmt_report(r, name):
 
 
 def cmd_judge(a):
+    from .scope import OutOfScopeError
+
     # `judge` is both a submodule and a function re-exported by the package, and the package name
     # wins -- so importing the submodule here silently binds the function instead. Import the
     # function directly and the ambiguity disappears.
@@ -56,7 +59,20 @@ def cmd_judge(a):
 
     rc = 0
     for p in a.paths:
-        r = judge(p, generation=a.generation)
+        try:
+            r = judge(p, generation=a.generation, anyway=a.anyway)
+        except OutOfScopeError as e:
+            # Refused rather than measured. The exit code is 2 -- distinct from 1, which means "measured,
+            # and a note was raised" -- because "I cannot measure this" and "I measured it and it looks
+            # unlike the reference" are different answers and a caller has to be able to tell them apart.
+            print("REFUSED: %s" % Path(p).name)
+            # The message is multi-paragraph, so every line after the first gets the same indent. A
+            # refusal the reader cannot parse is a refusal they will work around instead of reading.
+            for line in str(e).splitlines():
+                print("  " + line)
+            print()
+            rc = 2
+            continue
         print(_fmt_report(r, Path(p).name))
         print()
         if a.fail_on_note and r.notes:
@@ -170,10 +186,19 @@ def cmd_frames(a):
     from PIL import Image
     from . import frames as F
     from .judge import judge
+    from .scope import MIN_FRAMES_FOR_SPREAD, OutOfScopeError
 
     ims = sorted(Path(a.directory).glob("*.png"))
     if not ims:
         raise SystemExit("no .png in %s" % a.directory)
+    # A spread over two frames is a statement about two numbers. Refused for the same reason a 7px
+    # glyph is: the number would be printed and would mean something other than what it looks like.
+    if len(ims) < MIN_FRAMES_FOR_SPREAD and not a.anyway:
+        print("REFUSED: %d frame(s). A drift spread needs at least %d to say anything about motion; "
+              "below that it is the difference between two drawings.\n"
+              "Pass --anyway to see it anyway, as an uncalibrated number."
+              % (len(ims), MIN_FRAMES_FOR_SPREAD))
+        return 2
     first = Image.open(ims[0])
     tl = F.Timeline(a.width or first.width, a.height or first.height)
     for i, p in enumerate(ims):
@@ -199,6 +224,12 @@ def main(argv=None):
     j.add_argument("paths", nargs="+")
     j.add_argument("--fail-on-note", action="store_true",
                    help="exit non-zero when any note was raised, for use in a check")
+    j.add_argument("--anyway", action="store_true",
+                   help="measure something the reference has no subject for, and treat the numbers as "
+                        "uncalibrated. Without this, an input below %d px on its short side is refused: "
+                        "the metrics do not degrade gracefully there, they measure a property the input "
+                        "does not have. A 5x7 font glyph is 7 px and all 58 of its glyphs come back "
+                        "flagged, which reads as a finding and is not one." % SCOPE_MIN)
     j.add_argument("--generation", choices=C.GENERATIONS, default=None,
                    help="which reference table applies. The two generations sit far apart -- "
                         "TH123 at 26 colours and TH155 at 43 -- so judging one with the "
@@ -228,6 +259,9 @@ def main(argv=None):
     f.add_argument("--height", type=int)
     f.add_argument("--duration", type=int, default=100)
     f.add_argument("--scale", type=int, default=1)
+    f.add_argument("--anyway", action="store_true",
+                   help="report a drift spread from fewer frames than the measurement needs, as an "
+                        "uncalibrated number")
     f.set_defaults(func=cmd_frames)
 
     a = ap.parse_args(argv)
