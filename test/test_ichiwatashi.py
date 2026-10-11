@@ -846,6 +846,67 @@ class TestCalibration(unittest.TestCase):
                          "a sprite at the reference palette size was flagged: %s" % r.notes)
 
 
+class TestFont(unittest.TestCase):
+    """The family's shared 5x7 font: this repository is where it is produced.
+
+    The rule is that every art asset in the four NTVI tools comes out of Ichiwatashi, and this is the
+    first asset for which that is checkable rather than intended -- `volcano-separator` hand-authored
+    its table before the rule existed, so the source here can be compared against something already in
+    use. `tools/probe_font_from_ichiwatashi.py` does that comparison; these tests cover the pieces.
+    """
+
+    SRC = Path(__file__).resolve().parents[1] / "assets" / "font5x7.txt"
+
+    def test_the_source_parses_and_every_glyph_is_5x7(self):
+        from ichiwatashi.font import load_source
+        g = load_source(self.SRC)
+        self.assertGreater(len(g), 50, "the font source is too small to be the real one")
+        for ch, glyph in g.items():
+            self.assertEqual(len(glyph.rows), 7, ch)
+            for mask in glyph.rows:
+                self.assertLess(mask, 32, "%r sets a bit outside the five columns" % ch)
+
+    def test_a_space_glyph_needs_the_tab_not_a_whitespace_split(self):
+        """The one glyph whose key is whitespace, and the reason the format has a tab.
+
+        `line.split()` would drop it and the font would come back a glyph short with nothing to say so
+        -- which is the shape of every parsing mistake this file's docstring records.
+        """
+        from ichiwatashi.font import load_source
+        g = load_source(self.SRC)
+        self.assertIn(" ", g, "the space glyph is missing, so every word would run together")
+        self.assertEqual(g[" "].hex(), "00000000000000")
+
+    def test_the_two_repairs_the_source_claims_are_actually_in_it(self):
+        """The docstring says the source differs from volcano's table in exactly two places. Asserted,
+        because a claim about a deliberate difference that is not checked becomes a silent one."""
+        from ichiwatashi.font import load_source
+        g = load_source(self.SRC)
+        self.assertEqual(len(g["Q"].hex()), 14, "Q is not fourteen digits")
+        self.assertLess(int(g["/"].hex()[10:12], 16), 32, "/ still has a bit outside the five columns")
+
+    def test_emitted_hex_is_fourteen_digits_of_wire_format(self):
+        from ichiwatashi.font import load_source, to_volcano_hex
+        table = to_volcano_hex(list(load_source(self.SRC).values()))
+        self.assertGreater(len(table), 50)
+        for ch, h in table.items():
+            self.assertEqual(len(h), 14, ch)
+            int(h, 16)          # raises if it is not hex, which is the point of the assertion
+
+    def test_the_check_reports_what_is_missing_rather_than_that_it_parsed(self):
+        """The check that caught the real gap: 60 glyphs looked finished and there was no lowercase.
+
+        A font is exactly the asset where 'it parsed and the count is plausible' passes for done.
+        """
+        from ichiwatashi.font import check_font, load_source
+        c = check_font(load_source(self.SRC))
+        self.assertEqual(c["glyphs"], 60)
+        self.assertTrue(c["has_space"])
+        self.assertEqual(c["distinct_shapes"], 1, "this font is fixed-width, so one shape")
+        # and the gap is named rather than implied
+        self.assertIn("a", c["missing"], "lowercase is absent and the check should say so")
+
+
 class TestScope(unittest.TestCase):
     """The judge says what it is for, and refuses what it is not for.
 

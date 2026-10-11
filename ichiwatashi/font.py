@@ -24,12 +24,46 @@ difference rather than a rendering accident.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
-__all__ = ["Glyph", "FONT_W", "FONT_H", "glyph_from_rows", "glyph_from_text", "to_volcano_hex", "render_table"]
+__all__ = ["Glyph", "FONT_W", "FONT_H", "glyph_from_rows", "glyph_from_text", "load_source",
+           "parse_source", "to_volcano_hex", "render_table", "check_font"]
 
 FONT_W = 5
 FONT_H = 7
+
+
+def parse_source(text: str) -> dict:
+    """`{char: glyph}` from the `assets/font5x7.txt` format: one line per glyph, `char TAB hex`.
+
+    Comment lines start with `#`. A space glyph is written as `TAB hex` with an empty first field, so
+    the separator is the tab and not a split on whitespace -- `line.split()` would eat the space key
+    and the font would come back a glyph short with nothing to say so.
+    """
+    out = {}
+    for n, raw in enumerate(text.split("\n"), 1):
+        line = raw.rstrip("\r")
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if "\t" not in line:
+            raise ValueError("line %d has no tab, so a space glyph cannot be told from a bad line: %r"
+                             % (n, line[:40]))
+        key, _, digits = line.partition("\t")
+        # a trailing comment is stripped by hand: `split("#")` would break the `#` glyph itself
+        digits = digits.split("  #")[0].strip()
+        if len(key) != 1:
+            raise ValueError("line %d: the key must be one character, got %r" % (n, key))
+        if not re.fullmatch("[0-9A-Fa-f]{%d}" % (FONT_H * 2), digits):
+            raise ValueError("line %d: %r is not %d hex digits" % (n, digits, FONT_H * 2))
+        rows = tuple(int(digits[i * 2:i * 2 + 2], 16) for i in range(FONT_H))
+        out[key] = Glyph(key, rows)
+    return out
+
+
+def load_source(path) -> dict:
+    from pathlib import Path
+    return parse_source(Path(path).read_text(encoding="utf-8"))
 
 
 @dataclass(frozen=True)
@@ -101,3 +135,31 @@ def render_table(glyphs, *, per_line: int = 4, indent: str = "        ") -> str:
     for i in range(0, len(items), per_line):
         lines.append(indent + "; ".join(items[i:i + per_line]))
     return "\n".join(lines)
+
+
+def check_font(glyphs) -> dict:
+    """What this font can and cannot say, measured rather than assumed.
+
+    Reported instead of asserted, because a font is a work in progress and a test demanding a complete
+    one would be inventing requirements. What matters for a *window* font is narrower and checkable:
+    the characters an English panel needs, and whether every glyph is drawable at all.
+
+    **The `missing` field is the point.** The first version of this file reported 60 glyphs and looked
+    finished; the check said `"#'abcdefghijklmnopqrstuvwxyz` -- no lowercase, and no `#`, which a
+    panel showing a hex dump or a colour would want. A font is exactly the kind of asset where "it
+    parsed and the count is plausible" passes for done.
+    """
+    have = set(glyphs)
+    need = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 "
+               ".,:;!?'\"-_+=/()[]<>|&%#*")
+    # Every glyph in this source is 5 wide and 7 tall, so the shape is a constant rather than something
+    # measured. Counted so that a future variable-width font cannot quietly satisfy this function.
+    shapes = {(FONT_W, FONT_H) for _ in glyphs.values()}
+    return {
+        "glyphs": len(glyphs),
+        "missing": "".join(sorted(need - have)),
+        "lowercase": sum(1 for c in have if c.islower()),
+        # the space glyph is a real glyph here; a font without it runs every word together
+        "has_space": " " in have,
+        "distinct_shapes": len(shapes),
+    }

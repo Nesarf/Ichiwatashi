@@ -152,6 +152,43 @@ def plan_steps(spec):
     return plan
 
 
+def cmd_font(a):
+    """Emit the shared bitmap font in a form another tool can embed.
+
+    This is the family rule made operable: the source lives here and the consumer gets data in its own
+    format, rather than each tool growing its own font. `volcano-separator` is the first consumer, and
+    its table is what the source in `assets/` was checked against.
+    """
+    from .font import check_font, load_source, render_table, to_volcano_hex
+
+    glyphs = load_source(a.source)
+    if a.check:
+        c = check_font(glyphs)
+        print("%d glyph(s), all %dx%d" % (c["glyphs"], 5, 7))
+        if c["missing"]:
+            print("  not in this font: %s" % c["missing"])
+        else:
+            print("  covers the full window set (letters, digits, punctuation)")
+        print("  space glyph: %s" % ("yes" if c["has_space"] else "NO"))
+        if c["distinct_shapes"] != 1:
+            print("  WARNING: %d distinct glyph shapes -- a variable-width font would need the "
+                  "consumer's assumptions checked" % c["distinct_shapes"])
+        return 0
+
+    ordered = [glyphs[k] for k in sorted(glyphs)]
+    if a.format == "powershell":
+        # The consumer's own shape: a hashtable body it can paste, and the encoding its renderer reads.
+        print(render_table(ordered, per_line=4))
+    elif a.format == "hex":
+        for k in sorted(glyphs):
+            print("%s	%s" % (k, glyphs[k].hex()))
+    elif a.format == "text":
+        for k in sorted(glyphs):
+            print("%r:" % k)
+            print(glyphs[k])
+    return 0
+
+
 def cmd_build(a):
     from . import builder as B
 
@@ -251,6 +288,16 @@ def main(argv=None):
     b.add_argument("--out", required=True)
     b.add_argument("--preview", help="also write a nearest-neighbour x8 image here")
     b.set_defaults(func=cmd_build)
+
+    ft = sub.add_parser("font", help="emit the shared 5x7 bitmap font for another tool to embed")
+    ft.add_argument("--source", default=str(Path(__file__).resolve().parents[1] / "assets" / "font5x7.txt"),
+                    help="the font source; defaults to this repository's own copy")
+    ft.add_argument("--format", choices=("powershell", "hex", "text"), default="powershell",
+                    help="powershell: the hashtable body volcano-separator reads. hex: char<TAB>hex. "
+                         "text: each glyph drawn as # and . so it can be read or diffed.")
+    ft.add_argument("--check", action="store_true",
+                    help="report what the font can and cannot say, instead of emitting it")
+    ft.set_defaults(func=cmd_font)
 
     f = sub.add_parser("frames", help="assemble frames and report drift")
     f.add_argument("directory")

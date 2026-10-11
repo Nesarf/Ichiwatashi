@@ -1,0 +1,80 @@
+# The family's shared 5x7 bitmap font -- the source, in Ichiwatashi.
+#
+# Format: one glyph per line, `char TAB 14 hex digits`. Row 0 first, two digits per row,
+# bit 4 is the leftmost of five columns. This is the same encoding volcano-separator's
+# `bin/pixelfont.ps1` reads, so `ichiwatashi font` can emit that file's exact shape.
+#
+# Where this came from: volcano hand-authored its table before the family rule existed, so
+# its glyphs are the starting point -- but not copied blindly. Two entries in it are
+# defective, and a shared asset must not inherit them:
+#
+#   Q   was 16 digits; the renderer reads only the first 14, so its last pair was
+#       unreachable. Truncated here to the 14 that were ever drawn.
+#   /   had row 5 = 0x20 = 32, and five columns are bits 4..0, so bit 5 is a column that
+#       does not exist and the renderer dropped that row silently. Repaired to the
+#       leftmost column, which continues the diagonal row 4 leaves off.
+#
+# Both repairs are recorded in volcano's own tests as pinned defects, so this file and that
+# table intentionally differ in exactly two places.
+
+ 	00000000000000
+!	04040404040004
+"	0A0A0000000000
+#	0A1F0A0A1F0A00
+%	19120408091300
+&	0C12140A150A05
+(	02040808080402
+)	08040202020408
+*	000A041F040A00
++	0004041F040400
+,	00000000000408
+-	0000001F000000
+.	00000000000404
+/	01020408100100  # repaired
+0	0E11131519110E
+1	040C040404040E
+2	0E11010204081F
+3	1F02040201110E
+4	02060A121F0202
+5	1F101E0101110E
+6	0608101E11110E
+7	1F010204080808
+8	0E11110E11110E
+9	0E11110F01020C
+:	00040400040400
+;	00040400040800
+<	02040810080402
+=	00001F001F0000
+>	08040201020408
+?	0E110102040004
+A	0E11111F111111
+B	1E11111E11111E
+C	0E10101010100E
+D	1E11111111111E
+E	1F10101E10101F
+F	1F10101E101010
+G	0E10101711110F
+H	1111111F111111
+I	0E04040404040E
+J	0702020202120C
+K	11121418141211
+L	1010101010101F
+M	111B1515111111
+N	11191513111111
+O	0E11111111110E
+P	1E11111E101010
+Q	0E111111150E02  # repaired
+R	1E11111E141211
+S	0F10100E01011E
+T	1F040404040404
+U	1111111111110E
+V	11111111110A04
+W	11111115151B11
+X	11110A040A1111
+Y	11110A04040404
+Z	1F02040810101F
+[	0E08080808080E
+\	10080402010000
+]	0E02020202020E
+_	0000000000001F
+|	04040404040404
