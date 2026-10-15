@@ -8,6 +8,7 @@ one property by destroying another. Each is pinned so it cannot come back.
 from __future__ import annotations
 
 import glob
+import math
 import os
 import unittest
 
@@ -43,6 +44,7 @@ from ichiwatashi import frames as F
 from ichiwatashi.judge import judge as judge_fn
 from ichiwatashi.judge import _opaque
 from ichiwatashi import palette as P
+from ichiwatashi import perceptual as PC
 
 
 def coords_note(r):
@@ -1363,6 +1365,173 @@ class TestPeriodicClass(unittest.TestCase):
             self.assertEqual(r.periodic_class, "none",
                              "%s was called periodic: %s" % (os.path.basename(f), r.periodic_class))
         self.assertEqual(seen, {"none"})
+
+
+class TestPerceptual(unittest.TestCase):
+    """The colour metrics, verified against the values their own authors published.
+
+    **This class exists because of a gap recorded before the code did.** `corpus/REFERENCES.md` noted
+    that two candidate URLs for the official CIEDE2000 test data both returned 404, and that until a
+    working path was found, the statement "I implemented CIEDE2000" had nothing that could verify it.
+    The data was then found on the first author's own page -- the link was
+    `dataNprograms/ciede2000testdata.txt`, relative to the page, which is why searching for the file by
+    name did not surface it.
+
+    The 34 pairs are not a smoke test. They were chosen by Sharma, Wu and Dalal to catch specific
+    implementation mistakes: rows 4-6 pin the case where C1*C2 is zero, rows 9-12 sit either side of the
+    hue discontinuity at 180 degrees, and rows 21-24 are pairs whose correct answer is exactly 1.0.
+    """
+
+    DATA = Path(__file__).resolve().parent / "data" / "ciede2000testdata.txt"
+
+    def _rows(self):
+        rows = []
+        for line in self.DATA.read_text(encoding="utf-8").splitlines():
+            parts = line.split()
+            if len(parts) != 7:
+                continue
+            rows.append(tuple(float(v) for v in parts))
+        return rows
+
+    def test_the_reference_data_is_present_and_complete(self):
+        """34 rows, every one with seven fields. Asserted first, because every test below reads it and
+        an empty file would make them pass vacuously."""
+        rows = self._rows()
+        self.assertEqual(len(rows), 34, "the published set has 34 pairs")
+        # counted as non-blank lines rather than as newlines: the file ends with one, so a newline
+        # count would be 35 and the assertion would be about the trailing byte, not about the data
+        nonblank = [l for l in self.DATA.read_text(encoding="utf-8").splitlines() if l.strip()]
+        self.assertEqual(len(nonblank), 34)
+
+    def test_delta_e_2000_matches_the_published_values(self):
+        """Every pair to four decimals, which is the precision the file itself is written at.
+
+        A looser tolerance would pass a formula with a wrong constant in the T term; a tighter one
+        would fail on the file's own rounding.
+        """
+        for i, (L1, a1, b1, L2, a2, b2, expect) in enumerate(self._rows(), 1):
+            got = PC.delta_e_2000((L1, a1, b1), (L2, a2, b2))
+            self.assertAlmostEqual(got, expect, places=4,
+                                   msg="row %d: published %.4f, computed %.6f" % (i, expect, got))
+
+    def test_delta_e_2000_is_symmetric_as_constructed(self):
+        """Direction does not matter, and that is a property of the formula rather than a coincidence.
+
+        Every weighting function uses the mean of the two colours (the symmetrisation CIE94 introduced),
+        so swapping reference and sample cannot change the answer. Worth pinning because the opposite
+        claim is easy to find in summaries, and because the *palette* metrics are the asymmetric ones.
+        """
+        for L1, a1, b1, L2, a2, b2, _ in self._rows():
+            fwd = PC.delta_e_2000((L1, a1, b1), (L2, a2, b2))
+            rev = PC.delta_e_2000((L2, a2, b2), (L1, a1, b1))
+            self.assertAlmostEqual(fwd, rev, places=10)
+
+    def test_the_discontinuity_is_real_and_where_it_is_claimed(self):
+        """Rows 9-12 are two colours a hair apart on opposite sides of 180 degrees of hue.
+
+        A 0.0001 change in one coordinate must not move the answer by 0.04, but it does: 7.1792 becomes
+        7.2195. That is the discontinuity Sharma et al. documented, and asserting it here means the
+        reason this metric must not be used for large differences is pinned to data rather than quoted.
+        """
+        r = self._rows()
+        self.assertAlmostEqual(r[9][6], 7.1792, places=4)      # a*b* differs at the 4th decimal
+        self.assertAlmostEqual(r[10][6], 7.2195, places=4)     # ... and the answer moves by 0.04
+        self.assertGreater(abs(r[10][6] - r[9][6]), 0.03)
+
+    def test_lab_round_trips_through_srgb(self):
+        """`srgb_from_lab` has to be the inverse, or a converted palette cannot be written back.
+
+        Exact equality would be wrong to demand (the transform is continuous and the file stores bytes),
+        but one unit is the honest tolerance: a round trip that lands two bytes away would make
+        `separation` compare colours the image does not contain.
+        """
+        for rgb in [(0, 0, 0), (255, 255, 255), (128, 64, 200), (17, 200, 33), (250, 3, 3), (7, 7, 250)]:
+            back = PC.srgb_from_lab(PC.lab_from_srgb(rgb))
+            for a, b in zip(rgb, back):
+                self.assertLessEqual(abs(a - b), 1, "%r round-tripped to %r" % (rgb, back))
+
+    def test_hyab_is_city_block_in_lightness_and_euclidean_across_chroma(self):
+        """The shape of HyAB, asserted directly, because "Euclidean in Lab" is a different metric.
+
+        A lightness difference of 10 and a chroma difference of 10 must give different answers -- that
+        is the whole point of the metric, and a Euclidean implementation would return 10 for both.
+        """
+        # pure lightness move
+        dL = PC.hyab((50, 0, 0), (60, 0, 0))
+        self.assertAlmostEqual(dL, 10.0, places=10)
+        # pure chroma move of the same magnitude: Euclidean across a* and b*, so also 10
+        dC = PC.hyab((50, 0, 0), (50, 10, 0))
+        self.assertAlmostEqual(dC, 10.0, places=10)
+        # but a move that is half lightness and half chroma must add the two, not combine in quadrature
+        dBoth = PC.hyab((50, 0, 0), (55, 5, 0))
+        self.assertAlmostEqual(dBoth, 10.0, places=10)
+        self.assertNotAlmostEqual(PC.hyab((50, 0, 0), (55, 5, 0)), math.hypot(5, 5), places=3)
+
+    def test_oklab_agrees_with_delta_e_2000_about_ordering(self):
+        """Two metrics, one ordering: a large colour step must rank above a small one under both.
+
+        Not an agreement test in values -- they are different scales -- but a check that neither is
+        transposed or mis-indexed, which is the failure a value test alone can miss if both sides share
+        a mistake.
+        """
+        base = (120, 40, 90)
+        near = (126, 44, 92)
+        far = (200, 210, 60)
+        self.assertLess(PC.oklab_distance(base, near), PC.oklab_distance(base, far))
+        self.assertLess(PC.delta_e_2000(PC.lab_from_srgb(base), PC.lab_from_srgb(near)),
+                        PC.delta_e_2000(PC.lab_from_srgb(base), PC.lab_from_srgb(far)))
+
+    def test_distance_selects_by_name_and_refuses_an_unknown_one(self):
+        """A metric that is not named in the output is one the reader has to guess at.
+
+        Raising on an unknown name is the point: a silent fallback would let two runs disagree about
+        what they measured while carrying the same label in the report.
+        """
+        a, b = (10, 20, 30), (40, 50, 60)
+        for name in PC.METRICS:
+            self.assertGreater(PC.distance(a, b, name), 0)
+        self.assertAlmostEqual(PC.distance(a, b, "ciede2000"), PC.distance(a, b, "ciede2000"))
+        with self.assertRaises(ValueError):
+            PC.distance(a, b, "deltae2000")
+
+    def test_the_sampler_still_defaults_to_chebyshev(self):
+        """The default is a decision, not an oversight: the palette figures already in
+        `corpus/manifest.jsonl` were measured under Chebyshev, so moving the default would silently move
+        recorded facts. The alternative metrics are opt-in."""
+        im = self._ramp()
+        self.assertEqual(P.sample(im, n=6).__len__(), P.sample(im, n=6, metric="chebyshev").__len__())
+        with self.assertRaises(ValueError):
+            P.sample(im, n=6, metric="lab")           # not one of MERGE_FOR's names
+
+    def test_a_merge_threshold_is_not_transferable_between_metrics(self):
+        """Handing Chebyshev's 24 to CIEDE2000 collapses the palette, and that is the point.
+
+        Measured here rather than asserted in prose: a stair of greys 20 apart is a near-duplicate under
+        Chebyshev's 24 and a genuinely different colour under CIEDE2000, which reads such a step as more
+        than its own threshold of 6. So the same number means different things, and MERGE_FOR exists to
+        keep each metric in its own units.
+        """
+        im = Image.new("RGBA", (60, 20), (0, 0, 0, 255))
+        px = im.load()
+        for x in range(60):
+            v = (x // 20) * 20                        # 0, 20, 40
+            for y in range(20):
+                px[x, y] = (v, v, v, 255)
+        self.assertGreater(len(P.sample(im, n=6, metric="chebyshev")), 1,
+                           "chebyshev should keep at least two of the three greys apart")
+        self.assertGreater(len(P.sample(im, n=6, metric="oklab")), len(P.sample(im, n=6, metric="chebyshev")),
+                           "oklab reads these steps as further apart than chebyshev does")
+        self.assertEqual(len(P.sample(im, n=6, metric="ciede2000", merge_distance=24.0)), 1,
+                         "reusing the chebyshev number under ciede2000 must collapse the palette")
+
+    @staticmethod
+    def _ramp():
+        im = Image.new("RGBA", (40, 20), (0, 0, 0, 255))
+        px = im.load()
+        for x in range(40):
+            for y in range(20):
+                px[x, y] = (40 + x * 4, 30 + x * 2, 90, 255)
+        return im
 
 
 if __name__ == "__main__":

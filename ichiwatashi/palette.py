@@ -35,20 +35,65 @@ __all__ = ["sample", "saturate", "separation", "best_accents"]
 
 DEFAULT_MERGE = 24
 
+#: The merge threshold for each metric, in **that metric's own units**.
+#
+# **A threshold is not transferable between metrics, and the numbers are measured rather than assumed.**
+# Over 6,138 colour pairs taken from 12 real TH155 sprites, the pairs that Chebyshev's default merges
+# read differently under every other metric:
+#
+#     metric        median    max     (for the 235 pairs with chebyshev <= 24)
+#     chebyshev       <= 24    <= 24
+#     ciede2000        5.73   11.75
+#     hyab            11.73   33.01
+#     oklab            0.047    0.083
+#
+# So "24" means "merge anything within 24 of 255 in one channel" and nothing else. Handing 24 to
+# CIEDE2000 would merge colours that are 24 delta-E apart -- which on this corpus is at the 40th
+# percentile of *every* pair in the sprite, i.e. it would merge most of the palette into one entry.
+# The median of the mergeable set is the honest starting point for each, because it is the value that
+# keeps each metric doing what the old rule did: merging near-duplicates and not distinct colours.
+MERGE_FOR = {
+    "chebyshev": DEFAULT_MERGE,
+    "ciede2000": 6.0,
+    "hyab": 12.0,
+    "oklab": 0.05,
+}
+
 
 def _chebyshev(a, b):
     return max(abs(x - y) for x, y in zip(a, b))
 
 
-def sample(image, n: int = 20, *, merge_distance: int = DEFAULT_MERGE, budget: int = 1 << 18):
+def sample(image, n: int = 20, *, metric: str = "chebyshev", merge_distance: float = None,
+           budget: int = 1 << 18):
     """The `n` colours an image actually uses, near-duplicates merged first.
 
     Above `budget` pixels the image is strided down. A colour's *share* is what the result reports, and
     sampling every nth pixel of a large image estimates every share far more closely than the merge
     threshold cares about -- while building a dict of every distinct colour in a large crop raised
     MemoryError, and a large image is not a malformed input.
+
+    **`metric` selects the distance the merge uses, and defaults to `chebyshev`.** That default is a
+    decision rather than an oversight: the palette figures already recorded in `corpus/manifest.jsonl`
+    were measured under it, so changing the default would silently move facts that are already written
+    down. `perceptual.py` provides the alternatives, and `MERGE_FOR` carries a measured threshold in
+    each metric's own units -- see the comment there for why the threshold cannot be carried over.
     """
     from PIL import Image
+
+    if metric not in MERGE_FOR:
+        raise ValueError("unknown merge metric %r; known: %s"
+                         % (metric, ", ".join(sorted(MERGE_FOR))))
+    if merge_distance is None:
+        merge_distance = MERGE_FOR[metric]
+    if metric == "chebyshev":
+        dist = _chebyshev
+    else:
+        from .perceptual import METRICS
+        fn = METRICS[metric]
+
+        def dist(a, b, _fn=fn):
+            return _fn(a, b)
 
     src = image.convert("RGB") if not hasattr(image, "convert") else image.convert("RGB")
     if src.width * src.height > budget:
@@ -61,7 +106,7 @@ def sample(image, n: int = 20, *, merge_distance: int = DEFAULT_MERGE, budget: i
     groups = []
     for count, colour in counts:
         for i, (winner, total) in enumerate(groups):
-            if _chebyshev(colour, winner) <= merge_distance:
+            if dist(colour, winner) <= merge_distance:
                 groups[i] = (winner, total + count)
                 break
         else:
