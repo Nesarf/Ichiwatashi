@@ -28,6 +28,22 @@ def _fmt_report(r, name):
     else:
         lines.append("  pixel scale      %d  (no integer factor found; 1 is normal for "
                      "hand-authored art)" % r.pixel_scale)
+    # **What the runs actually form, said separately from the factor.** The factor is one number and
+    # the class is another, because the same rule that finds an upscale also fires on a flat mask and
+    # on a solid block: 59 of 300 real sprites were flagged as upscaled and all 59 were one colour.
+    # Printing the class next to the factor is what keeps a mask from being read as scaled art.
+    if r.periodic_class != "none":
+        lines.append("  periodicity      %s" % r.periodic_class)
+    # And where the grid sits, when a factor was measured. A non-zero phase means the runs are
+    # multiples of the factor but do not line up with the origin -- which is a crop, a real
+    # condition the factor alone reports as a plain upscale.
+    if r.upscale > 1 and r.phase_agree >= 0.5:
+        if r.phase:
+            lines.append("  grid offset      %d mod %d  (%.1f%% of the runs agree) -- a crop out of "
+                         "a larger upscale" % (r.phase, r.upscale, 100 * r.phase_agree))
+        else:
+            lines.append("  grid offset      none  (%.1f%% of the runs start on multiples of %d)"
+                         % (100 * r.phase_agree, r.upscale))
     lines.append("  isolated pixels  %d  (%.2f%%)" %
                  (r.isolated, 100 * r.isolated_rate))
     lines.append("  clusters         %d, largest %d (%.1f%%), median %s" %

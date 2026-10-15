@@ -7,6 +7,8 @@ one property by destroying another. Each is pinned so it cannot come back.
 """
 from __future__ import annotations
 
+import glob
+import os
 import unittest
 
 from pathlib import Path
@@ -1205,6 +1207,162 @@ class TestPixelScale(unittest.TestCase):
         r = judge_fn(im)
         self.assertEqual(r.upscale, 3)
         self.assertEqual(r.pixel_scale, 3)
+
+
+class TestPeriodicClass(unittest.TestCase):
+    """What the runs actually form, and where the grid sits -- checked against drawings built to be one
+    specific thing each.
+
+    **Why these are synthetic, and why that is not circular.** The corpus is 160 hand-authored sprites
+    and all 160 read `upscale=0` and `periodic_class=none`, which is the right answer for hand drawing
+    and exercises none of the branches. `POLICY.md` gate 3 says synthetic samples may verify a metric as
+    long as they never enter the reference table, which is exactly the role they play. The corpus itself
+    is asserted at the end of this class, so the synthetic cases cannot drift away from it.
+
+    **Every expectation here was first a mismatch.** The probe that produced these cases reported 3 of 8
+    then 6 of 9 before reaching 9 of 9, and each failure was a real defect rather than a bad fixture:
+
+        1. a clean x4 upscale read as 8          the factor rule kept the largest explainer
+        2. a clean x4 upscale read as 4 then 2   the mirror fix under-reported instead
+        3. a solid block read as `mask`          the one-step interior test found no interior at all
+        4. a repeating grid read as `mask`       a distance-2 test is satisfied by any period-2 pattern
+        5. a flat silhouette read as `upscale`   a one-colour drawing's runs are multiples of anything
+    """
+
+    @staticmethod
+    def _rect(x0, y0, x1, y1, colour, size=(64, 64)):
+        im = Image.new("RGBA", size, (0, 0, 0, 0))
+        px = im.load()
+        for y in range(y0, y1):
+            for x in range(x0, x1):
+                px[x, y] = colour
+        return im
+
+    @staticmethod
+    def _upscale(im, n):
+        return im.resize((im.width * n, im.height * n), Image.NEAREST)
+
+    def _mixed(self):
+        """Features of 1, 3 and 5 source pixels, so the GCD of the runs is the scale itself."""
+        im = Image.new("RGBA", (32, 32), (0, 0, 0, 0))
+        a = self._rect(4, 4, 5, 12, (200, 60, 60, 255), (32, 32))
+        b = self._rect(7, 6, 10, 16, (60, 120, 200, 255), (32, 32))
+        c = self._rect(5, 14, 10, 20, (240, 220, 90, 255), (32, 32))
+        out = Image.new("RGBA", (32, 32), (0, 0, 0, 0))
+        for src in (a, b, c):
+            out.alpha_composite(src)
+        return out
+
+    def test_clean_upscale_reads_its_own_factor(self):
+        """The factor is not inflated to whatever the drawing's feature widths allow.
+
+        Before the fix this read 8 for a x4 upscale, because a drawing whose features are even-width
+        produces runs that every multiple of the scale also explains. The first correction took the
+        smallest explaining factor instead and read 2 -- the mirror mistake. What is asserted now is
+        both halves: the reported factor, and that the other fitting factors are *carried* rather than
+        silently discarded.
+        """
+        r = judge_fn(self._upscale(self._mixed(), 4))
+        self.assertEqual(r.periodic_class, "upscale")
+        self.assertEqual(r.upscale, 4)
+        self.assertIn(4, r.upscale_candidates)
+        # x3 is the unambiguous control: 3 is odd, so no multiple of it can fit by accident
+        r3 = judge_fn(self._upscale(self._mixed(), 3))
+        self.assertEqual(r3.upscale, 3)
+        self.assertEqual(tuple(r3.upscale_candidates), (3,))
+
+    def test_even_width_features_are_reported_as_ambiguous(self):
+        """Three factors fit and the report says all three.
+
+        This is the concrete form of Popescu & Farid's caveat that the amount of resampling is not
+        uniquely identifiable: if every feature is an even number of source pixels, then 2, 4 and 8
+        produce indistinguishable run-length sets. Reporting one of them alone would assert a precision
+        the data does not have.
+        """
+        even = Image.new("RGBA", (24, 24), (0, 0, 0, 0))
+        for src in (self._rect(4, 4, 10, 12, (200, 60, 60, 255), (24, 24)),
+                    self._rect(12, 6, 18, 16, (60, 120, 200, 255), (24, 24)),
+                    self._rect(6, 14, 14, 20, (240, 220, 90, 255), (24, 24))):
+            even.alpha_composite(src)
+        r = judge_fn(self._upscale(even, 4))
+        self.assertEqual(r.periodic_class, "upscale")
+        self.assertEqual(tuple(r.upscale_candidates), (2, 4, 8),
+                         "an all-even drawing must carry all three fitting factors")
+
+    def test_a_crop_off_the_grid_is_reported_as_a_phase(self):
+        """A factor of 4 with a phase of 2 is genuine scaled art that has been cropped.
+
+        The factor alone cannot say this -- it reports a plain upscale -- which is why the phase is a
+        field and not a note. The alignment fraction is asserted alongside it because it is a confidence
+        and not a verdict: an off-by-one crop still leaves most runs agreeing.
+        """
+        big = self._upscale(self._mixed(), 4)
+        r = judge_fn(big.crop((2, 0, big.width, big.height)))
+        self.assertEqual(r.upscale, 4)
+        self.assertEqual(r.phase, 2)
+        self.assertGreater(r.phase_agree, 0.5)
+        # and an uncropped upscale reports no offset, so a phase of 0 is meaningful rather than unset
+        self.assertEqual(judge_fn(big).phase, 0)
+
+    def test_a_flat_silhouette_is_not_called_an_upscale(self):
+        """A one-colour drawing's runs are multiples of anything, so the factor must not win.
+
+        This is the shape that 59 of 300 real sprites hit: the multiple-of-n rule fired and all 59 were
+        single-colour. The interior test is what separates it from a drawing -- and a silhouette's total
+        colour count does not, because a drawn silhouette is a fill colour plus an outline colour.
+        """
+        n = 200
+        disc = Image.new("RGBA", (n, n), (0, 0, 0, 0))
+        px = disc.load()
+        for y in range(n):
+            half = int(48 * (1 - abs(y - n // 2) / (n // 2)))
+            for x in range(n // 2 - half, n // 2 + half):
+                px[x, y] = (255, 255, 255, 255)
+        r = judge_fn(disc)
+        self.assertEqual(r.periodic_class, "mask")
+        # a rectangle drawn in one colour is both one interior colour and all-equal runs, and the
+        # narrower statement wins
+        self.assertEqual(judge_fn(self._rect(5, 5, 35, 35, (10, 200, 10, 255), (40, 40))).periodic_class,
+                         "constant")
+
+    def test_a_repeating_grid_is_periodicity_and_not_a_mask(self):
+        """A regular grid is periodic, so it falls through to `upscale` -- and the tool says the
+        structure, not the provenance.
+
+        The resampling literature warns that one detector fires on things that are not resampling: a
+        demosaicing pattern and JPEG's 8-pixel block grid both look periodic. The answer taken here is
+        to name the class, never to claim where the image came from -- so what this asserts is the class
+        and the factor, not a verdict. The first version of this fixture was one colour, which read
+        `mask` and was correct; two colours are needed to ask the periodicity question at all.
+        """
+        grid = self._rect(0, 0, 64, 64, (200, 60, 60, 255), (64, 64))
+        px = grid.load()
+        for y in range(64):
+            for x in range(64):
+                if (x % 8 < 4) != (y % 8 < 4):
+                    px[x, y] = (90, 90, 90, 255)
+        r = judge_fn(grid)
+        self.assertEqual(r.periodic_class, "upscale")
+        self.assertIn(r.upscale, r.upscale_candidates)
+
+    def test_hand_authored_art_is_not_called_periodic(self):
+        """The direction that matters most: 160 real sprites read `none`, and this keeps it that way.
+
+        The corpus lives outside the repository (samples are not committed), so this test skips when it
+        is absent rather than pretending to have checked. When it is present it asserts the whole set,
+        which is what makes the synthetic cases above safe: they verify the branches, and this verifies
+        that the branches stay shut on real art.
+        """
+        samples = sorted(glob.glob(r"E:\DaShaoHuo\downloads\ichiwatashi-corpus\**\*.png", recursive=True))
+        if not samples:
+            self.skipTest("corpus samples are not on this machine")
+        seen = set()
+        for f in samples:
+            r = judge_fn(Image.open(f).convert("RGBA"))
+            seen.add(r.periodic_class)
+            self.assertEqual(r.periodic_class, "none",
+                             "%s was called periodic: %s" % (os.path.basename(f), r.periodic_class))
+        self.assertEqual(seen, {"none"})
 
 
 if __name__ == "__main__":

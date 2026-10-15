@@ -79,6 +79,90 @@ class RunStats:
     colours: int
     opaque: int
     pixels: int
+    phase: int = 0
+    phase_fraction: float = 0.0
+    #: Every factor that explains nearly every run, ascending. Carried because a single factor is not
+    #: identifiable from run lengths: a drawing whose features are all even widths produces run sets
+    #: that 2, 4 and 8 all explain, and reporting one of them alone asserts a precision the data does
+    #: not have. This is the tool's version of the *interval* that TIFS 2017 reports instead of a
+    #: point estimate.
+    candidates: tuple = ()
+    #: Colours on pixels that sit inside a uniform 5x5 area, and how many such pixels there are. A flat
+    #: silhouette is one such colour however many outline colours ring it, and a repeating pattern has
+    #: none at all -- so `interior_pixels` has to be non-empty before `interior_colours` means anything.
+    #: Without that guard a 40x40 solid block and a 64x64 grid both read "interior empty", which is a
+    #: statement about the test's radius, not about the drawing.
+    interior_colours: int = 0
+    interior_pixels: int = 0
+
+    def classify(self):
+        """What kind of drawing the runs describe -- the field the literature says must be carried.
+
+        The resampling-detection methods all fire on the same periodic structure, and they fire on
+        things that are not resampling at all: a demosaicing pattern looks like a factor of 2, and
+        JPEG's 8-pixel block grid looks like a factor of 8. Böhme & Kirchner's survey names this, and
+        the consequence for a measuring tool is not "detect better" but "say which class you found",
+        because a single number that merges them will call a photograph a double upscale.
+
+        This is a **structural** classification of what the runs actually form, not a forensic verdict
+        about provenance -- the wording says what was measured, and `mask` and `constant` exist
+        precisely because both satisfied "every run is a multiple of n" on real data:
+
+            mask      a flat silhouette: one colour, or one outline colour around one fill colour
+            constant  a small drawing whose runs are all the same length: a solid block
+            upscale   runs are multiples of a measured pitch above 1: reads as an integer upscale
+            none      nothing periodic found, which includes hand-authored art
+
+        **The order is most-specific-first, and each step was forced by a probe mismatch.** A solid
+        block was reported as `mask`; a *repeating* pattern was reported as `constant`, because
+        repetition also makes every run the same length; and a flat silhouette drawn at scale was
+        reported as `upscale`, because a one-colour drawing's runs are trivially multiples of anything.
+        In each case the broader rule had swallowed the narrower fact, so the narrow tests run first:
+
+            mask      interior is one colour -- a flat silhouette, whatever its scale
+            constant  small drawing, all runs equal: a solid block
+            upscale   runs are multiples of a measured pitch above 1
+            none      nothing periodic found, which includes hand-authored art
+
+        `mask` is tested by the *interior* rather than the total colour count: a drawn silhouette is one
+        fill colour plus one outline colour, so a total count of 2 also describes a mask. A drawing whose
+        interior is one colour has no structure to measure a unit size against, which is why that fact
+        wins over any factor the runs happen to support.
+        """
+        if self.interior_pixels and self.interior_colours <= 1:
+            # A filled rectangle satisfies both descriptors and the narrower one wins: "every run is the
+            # same length" says something specific (there is no structure here at all), while "the
+            # interior is one colour" is true of any silhouette. Where the two coincide, the stronger
+            # fact is the one worth recording.
+            if self.longest and self.longest == self.modal and self.runs < 100:
+                return "constant"
+            return "mask"
+        if self.upscale > 1 and self.runs >= 100:
+            return "upscale"
+        if self.upscale <= 1 and self.longest and self.longest == self.modal and self.runs < 100:
+            return "constant"
+        if self.upscale > 1:
+            return "upscale"
+        return "none"
+
+    def phase_note(self):
+        """Where the pixel grid starts, when a pitch was measured and the runs agree on a residue.
+
+        A clean integer upscale puts every source-pixel boundary on a multiple of the pitch, so every
+        run begins at a column congruent to one residue. Reporting that residue answers a question the
+        factor alone cannot: an image whose factor is 4 but whose phase is 2 was **cropped** from a
+        larger upscale -- it is genuine scaled art, not hand drawing, and a tool that only reports the
+        factor has no way to say so.
+        """
+        if self.upscale <= 1 or not self.runs:
+            return None
+        pct = 100.0 * self.phase_fraction
+        if self.phase:
+            return ("the runs start at column %d mod %d (%.1f%% of them), so the grid is offset by %d "
+                    "pixel(s) -- what a crop out of a larger upscale looks like"
+                    % (self.phase, self.upscale, pct, self.phase))
+        return ("the runs start on multiples of %d (%.1f%% of them), so nothing is cropped off the "
+                "grid" % (self.upscale, pct))
 
     def hint(self):
         """A sentence about unit size, or None when the runs say nothing worth reporting.
@@ -134,8 +218,10 @@ def _run_stats(im, coords):
     px = im.load()
     w, h = im.size
     runs = []
+    starts = []          # the column each kept run begins at, which is what carries the phase
     for y in range(h):
         run = 1
+        start = 0
         opaque_run = 1 if px[0, y][3] > 0 else 0
         for x in range(1, w):
             if px[x, y] == px[x - 1, y]:
@@ -147,29 +233,91 @@ def _run_stats(im, coords):
                 # run per row, which would make every sprite with a margin look scaled.
                 if opaque_run:
                     runs.append(opaque_run)
+                    starts.append(x - run)
                 run = 1
+                start = x
                 opaque_run = 1 if px[x, y][3] > 0 else 0
         if opaque_run:
             runs.append(opaque_run)
+            starts.append(w - run)
     if not runs:
         return RunStats(0, 0, 0, 0, 0, 0.0, 0, 0, 0, 0)
     longest = max(runs)
     modal = Counter(runs).most_common(1)[0][0]
-    # The largest factor that accounts for nearly every run. Taking the *largest* rather than the
-    # best-scoring one matters: 2 always scores at least as high as any even number, so a
-    # best-score rule would report 2 for a clean x4.
+    # **A single factor is not identifiable from run lengths, and this measures why.**
+    #
+    # The rule used to keep the largest factor explaining >=95% of the runs, which inflates: a clean
+    # x4 upscale of a drawing whose features are even-width produces runs like 16, 24, 32, and 8
+    # explains all of them too, so it reported 8. Taking the smallest instead under-reports the mirror
+    # case: with the same runs, 2 explains every length as well.
+    #
+    # **Both are wrong for the same reason, and it is not a coding mistake.** Run lengths constrain the
+    # scale only up to the GCD of the drawing's own feature widths: if every feature is an even number
+    # of source pixels, then 2s and s produce run-length sets that are indistinguishable. This is the
+    # concrete form of Popescu & Farid's own caveat that the amount of resampling is provably not
+    # uniquely identifiable -- and Vazquez-Padin's random-matrix work reports an *interval* of plausible
+    # factors for exactly this reason. So the honest interface is not one number.
+    #
+    # What is reported: `upscale` is the largest factor that explains nearly every run, which is the
+    # most conservative single value -- it can only be right or too large, never a fraction of the
+    # truth -- and `upscale_candidates` carries every factor that fits, so a drawing made of even-width
+    # features shows 8 alongside 4 and 2 rather than silently asserting one of them.
     upscale, frac = 0, 0.0
+    fits = []
     if len(runs) >= 8:
         for n in range(2, 65):
             f = sum(1 for r in runs if r % n == 0) / len(runs)
-            if f >= 0.95 and n > upscale:
-                upscale, frac = n, f
+            if f >= 0.95:
+                fits.append(n)
+        if fits:
+            upscale, frac = fits[-1], sum(1 for r in runs if r % fits[-1] == 0) / len(runs)
     notm = sum(1 for r in runs if upscale and r % upscale) if upscale else 0
+    # **The phase, and the count it is taken over.** The modulus is the measured pitch when there is
+    # one; otherwise the GCD is the only periodic structure available, and `modal` is the last resort
+    # so that a drawing whose runs share a length still reports where its grid sits. Every run begins
+    # at a multiple of the pitch in a clean upscale, and at one residue after a crop -- so the modal
+    # residue is the offset and the fraction is how many runs agree, which is a confidence and not a
+    # verdict. Measured over the corpus before being trusted; see the test's pinned expectations.
+    phase, phase_frac, modulus = 0, 0.0, 0
+    for cand in (upscale, reduce(gcd, [r for r in runs if r > 1], 0), modal, *(fits or (0,))):
+        if cand and cand > 1:
+            residues = Counter(s % cand for s in starts)
+            res, count = residues.most_common(1)[0]
+            if count / len(starts) > phase_frac:
+                phase, phase_frac, modulus = res, count / len(starts), cand
     # `colours` is measured from the same pixels the runs come from, so the two rules cannot
     # disagree about what was drawn.
     ncol = len({px[x, y] for x, y in coords}) if coords else 0
+    # The interior: a drawn pixel with a flat 5x5 neighbourhood around it. **The radius and the shape
+    # of this test were both forced by probe mismatches**, in that order.
+    #
+    # A one-step test finds nothing even in a filled rectangle, because every drawn pixel of a solid
+    # block still has a *different* neighbour at the block's own boundary -- the count came back 0 and a
+    # solid block read as `mask`. A "two steps along each axis" test then passed for the solid block but
+    # also passed for a checkerboard, because a checkerboard's distance-2 neighbour is its own colour;
+    # so that version called a repeating pattern a mask. What actually distinguishes them is whether a
+    # pixel sits inside a *uniform area*, which is the full square of radius 2: a solid region satisfies
+    # it, and any pattern whose period is 4 or less cannot.
+    cset = set(coords)
+    interior = set()
+    interior_n = 0
+    for x, y in coords:
+        c = px[x, y]
+        ok = True
+        for dy in (-2, -1, 0, 1, 2):
+            for dx in (-2, -1, 0, 1, 2):
+                if (x + dx, y + dy) not in cset or px[x + dx, y + dy] != c:
+                    ok = False
+                    break
+            if not ok:
+                break
+        if ok:
+            interior.add(c)
+            interior_n += 1
     return RunStats(reduce(gcd, [r for r in runs if r > 1], 0), longest, modal, len(runs),
-                    upscale, frac, notm, ncol, len(coords), w * h)
+                    upscale, frac, notm, ncol, len(coords), w * h,
+                    phase if modulus == max(upscale, 1) else 0, phase_frac,
+                    tuple(fits), len(interior), interior_n)
 
 
 def _isolated(im, coords):
@@ -411,6 +559,19 @@ class Report:
     run_modal: int
     upscale: int
     upscale_fraction: float
+    #: The residue class the runs start on, and how many of them agree. Together they answer a
+    #: question the factor cannot: a factor of 4 with a phase of 2 was **cropped** out of a larger
+    #: upscale, so it is genuine scaled art and not hand drawing. `phase_agree` is a confidence
+    #: rather than a verdict, and `periodic_class` names what the runs actually form, because the
+    #: resampling literature's own warning is that one detector fires on demosaicing and on JPEG's
+    #: block grid -- a number that merges those will call a photograph a double upscale.
+    phase: int
+    phase_agree: float
+    periodic_class: str
+    #: Every factor the run lengths are compatible with, ascending. A single factor is not identifiable
+    #: from runs alone, so this is what the report must carry instead of pretending one number is the
+    #: answer -- the same shape as the interval that TIFS 2017 reports rather than a point estimate.
+    upscale_candidates: tuple
     isolated: int
     isolated_rate: float
     clusters: int
@@ -596,6 +757,9 @@ def judge(image, *, generation: str | None = None, anyway: bool = False) -> Repo
         run_modal=runs.modal,
         upscale=runs.upscale,
         upscale_fraction=runs.upscale_fraction,
+        phase=runs.phase, phase_agree=round(runs.phase_fraction, 4),
+        periodic_class=runs.classify(),
+        upscale_candidates=tuple(runs.candidates),
         isolated=iso, isolated_rate=round(iso / n, 4),
         clusters=len(sizes), largest_cluster=sizes[0] if sizes else 0,
         largest_cluster_rate=round((sizes[0] if sizes else 0) / n, 4),
