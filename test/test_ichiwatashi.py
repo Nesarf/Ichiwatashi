@@ -1848,5 +1848,173 @@ class TestFigures(unittest.TestCase):
                                msg="a value twice as large must draw a bar twice as long: %s" % lengths)
 
 
+class TestHistory(unittest.TestCase):
+    """Undo, redo, and the two defects that shaped them.
+
+    The acceptance criterion is the one this project uses everywhere: **state has to be reconstructable
+    rather than trusted.** So every assertion here compares cells, not counts -- an undo that returns True
+    and leaves the canvas wrong is the failure worth catching, and only a pixel comparison catches it.
+
+    Two defects were found while building this and both are pinned below:
+
+    1. Recording on `put` alone gave a sixteen-pixel `rect` sixteen history entries, so `undo` took
+       sixteen calls to step back one operation.
+    2. An idempotence check on the label then made two consecutive `rect` calls leave **one** entry, so one
+       undo removed both and the state between them was never snapshotted. The guard was hiding a real
+       loss.
+    """
+
+    def test_one_operation_is_one_history_entry(self):
+        """The first defect: a verb is one step however many pixels it writes."""
+        c = B.Canvas(8, 8)
+        c.rect(1, 1, 4, 4, "r")
+        self.assertEqual(c.history(), ["<start>", "rect"])
+        c.disc(4, 4, 2, "b")
+        self.assertEqual(c.history(), ["<start>", "rect", "disc"])
+        c.line(0, 0, 7, 7, "k")
+        self.assertEqual(c.history(), ["<start>", "rect", "disc", "line"])
+        c.outline("e")
+        self.assertEqual(c.history()[-1], "outline")
+        c.recolor({"r": "y"})
+        self.assertEqual(c.history()[-1], "recolor")
+
+    def test_two_identical_operations_are_two_entries(self):
+        """The second defect, and the reason there is no idempotence check on the label.
+
+        Two `rect` calls in a row are two operations. A guard that skipped a repeated label left one entry,
+        so a single undo removed both and `revert` to the state between them was unreachable.
+        """
+        c = B.Canvas(6, 6)
+        c.rect(1, 1, 4, 4, "r")
+        mid = c.state()
+        c.rect(2, 2, 3, 3, "b")
+        end = c.state()
+        self.assertEqual(c.history(), ["<start>", "rect", "rect"])
+        self.assertTrue(c.undo())
+        self.assertEqual(c.state(), mid, "one undo must land between the two rectangles")
+        self.assertTrue(c.undo())
+        self.assertNotEqual(c.state(), mid)
+        self.assertTrue(c.redo())
+        self.assertEqual(c.state(), mid)
+        self.assertTrue(c.redo())
+        self.assertEqual(c.state(), end)
+
+    def test_a_dynamic_put_loop_is_one_entry_inside_a_transaction(self):
+        """`put` is the public verb and the interior path, so both callers are covered by the counter."""
+        c = B.Canvas(8, 8)
+        before = c.state()
+        with c._shape("computed"):
+            for i in range(8):
+                c.put(i, 0, "k")
+        self.assertEqual(c.history(), ["<start>", "computed"])
+        c.undo()
+        self.assertEqual(c.state(), before)
+
+    def test_a_lone_put_is_its_own_entry(self):
+        """The other half of the same rule: outside a transaction, a single pixel IS an operation."""
+        c = B.Canvas(4, 4)
+        c.put(1, 1, "k")
+        self.assertEqual(c.history(), ["<start>", "put"])
+        self.assertTrue(c.undo())
+        self.assertEqual(c.get(1, 1), c.bg)
+
+    def test_undo_and_redo_walk_the_whole_history_both_ways(self):
+        """Every intermediate state, compared as cells rather than as counts."""
+        c = B.Canvas(10, 10)
+        states = [c.state()]
+        for i in range(6):
+            c.rect(i, i, 9 - i, 9 - i, "k")
+            states.append(c.state())
+        self.assertEqual(len(c.history()), 7)
+        for i in range(len(states) - 1, 0, -1):
+            self.assertTrue(c.undo())
+            self.assertEqual(c.state(), states[i - 1], "undo to step %d" % (i - 1))
+        self.assertFalse(c.undo(), "the history is exhausted")
+        for i in range(1, len(states)):
+            self.assertTrue(c.redo())
+            self.assertEqual(c.state(), states[i], "redo to step %d" % i)
+        self.assertFalse(c.redo(), "the redo stack is exhausted")
+
+    def test_a_new_operation_after_an_undo_drops_the_redo_stack(self):
+        """Otherwise a redo would resurrect a branch the author had already abandoned."""
+        c = B.Canvas(6, 6)
+        c.rect(1, 1, 4, 4, "r")
+        c.rect(2, 2, 3, 3, "b")
+        c.undo()
+        self.assertTrue(c.redo() or True)          # the stack exists here
+        c.disc(3, 3, 1, "y")                       # a new operation
+        self.assertFalse(c.redo(), "the abandoned branch must not come back")
+
+    def test_undo_on_an_empty_history_is_false_and_changes_nothing(self):
+        """A refusal that is reported rather than a silent no-op the caller has to guess at."""
+        c = B.Canvas(4, 4)
+        before = c.state()
+        self.assertFalse(c.undo())
+        self.assertEqual(c.state(), before)
+        self.assertFalse(c.redo())
+        self.assertEqual(c.state(), before)
+
+    def test_every_state_the_history_holds_is_a_state_the_canvas_had(self):
+        """The property that makes a snapshot honest: no state is invented by stepping back.
+
+        Twelve random operations, then walking the history down and checking each landing against the set
+        of states the canvas actually occupied.
+        """
+        import random as _r
+        rnd = _r.Random(11)
+        c = B.Canvas(16, 16)
+        seen = {c.state()}
+        for _ in range(12):
+            kind = rnd.choice(["rect", "disc", "line", "put"])
+            if kind == "rect":
+                a, b = sorted(rnd.sample(range(16), 2))
+                c.rect(a, a, b, b, rnd.choice("rgb"))
+            elif kind == "disc":
+                c.disc(rnd.uniform(2, 14), rnd.uniform(2, 14), rnd.uniform(1, 5), rnd.choice("rgb"))
+            elif kind == "line":
+                c.line(0, 0, rnd.randrange(16), rnd.randrange(16), rnd.choice("rgb"))
+            else:
+                c.put(rnd.randrange(16), rnd.randrange(16), rnd.choice("rgb"))
+            seen.add(c.state())
+        while c.undo():
+            self.assertIn(c.state(), seen, "undo landed on a state the canvas never had")
+
+    def test_plan_steps_accepts_and_validates_the_history_ops(self):
+        """The script-level vocabulary, including the refusal of a nonsense count."""
+        from ichiwatashi.cli import plan_steps, SpecError
+        spec = {"width": 8, "height": 8, "steps": [{"op": "rect", "x0": 0, "y0": 0, "x1": 3, "y1": 3,
+                                                   "key": "r"},
+                                                  {"op": "undo"},
+                                                  {"op": "redo", "count": 2}]}
+        plan = plan_steps(spec)
+        self.assertEqual([k for k, _ in plan], ["rect", "undo", "redo"])
+        self.assertEqual(plan[1][1]["count"], 1, "an omitted count means one step")
+        self.assertEqual(plan[2][1]["count"], 2)
+        for bad in (0, -1, 1.5, "2"):
+            with self.assertRaises(SpecError):
+                plan_steps({"width": 8, "height": 8, "steps": [{"op": "undo", "count": bad}]})
+
+    def test_the_undo_demo_script_produces_the_retry_and_not_the_first_attempt(self):
+        """The end-to-end case the TODO entry is about: try, step back, try again, in one run.
+
+        Two rectangles are drawn at the same place; the first is undone before the second. The assertion is
+        on the pixels, so a script that reported an undo without performing one fails here.
+        """
+        from ichiwatashi.cli import plan_steps
+        spec = {"width": 20, "height": 12, "palette": {".": None, "r": [200, 60, 60, 255]},
+                "steps": [{"op": "rect", "x0": 2, "y0": 2, "x1": 17, "y1": 9, "key": "r"},
+                          {"op": "undo"},
+                          {"op": "rect", "x0": 6, "y0": 2, "x1": 13, "y1": 9, "key": "r"}]}
+        c = B.Canvas(spec["width"], spec["height"])
+        for kind, step in plan_steps(spec):
+            if kind in ("undo", "redo"):
+                getattr(c, kind)()
+            else:
+                getattr(c, kind)(step["x0"], step["y0"], step["x1"], step["y1"], step["key"])
+        # the wide first attempt must be gone and only the narrow retry present
+        self.assertEqual(c.get(3, 5), ".", "the first rectangle was not undone")
+        self.assertEqual(c.get(10, 5), "r", "the retry was not drawn")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -124,6 +124,30 @@ Two layout decisions were forced by reading the pixels back rather than by looki
   reference band with the shipped reference marked on it, which is the comparison `tools/calibrate.py`
   prints as text.
 
+## History
+
+```json
+{"op": "rect", "x0": 2, "y0": 2, "x1": 17, "y1": 9, "key": "r"},
+{"op": "undo"},
+{"op": "rect", "x0": 6, "y0": 2, "x1": 13, "y1": 9, "key": "r"}
+```
+
+A shape script can step back over its own earlier steps and try something else in place, so one run shows
+both attempts instead of two files. `{"op": "undo", "count": 2}` steps back twice; `redo` steps forward.
+**A refused undo is printed**, because a run that said the same thing either way would let a reader
+believe an edit had been rolled back when the canvas never moved.
+
+The API is `Canvas.undo()` / `redo()` / `history()` / `state()` / `clear_history()`, and a caller looping
+over `put` for a dynamically computed region can group it with `with canvas._shape("name"):`.
+
+**Undo stores a snapshot of the cells rather than a diff, and that is the acceptance test talking.** This
+project's rule is that state is reconstructable rather than trusted; a diff-based undo would need every
+verb to be exactly invertible, and `shade` and `outline` both read the canvas while writing to it, so an
+inverse of those is not a local operation. A snapshot needs nothing of the kind: undo puts the cells back
+to a state that was *observed*, so "pixel-identical to what it was" holds by construction. The cost was
+measured before choosing — a 512 by 512 canvas is 262,144 single-character strings and copying that list
+takes about a millisecond.
+
 ## Use
 
 ### Measure

@@ -126,6 +126,12 @@ SHAPE_ARGS = {
     "cone": ("y0", "y1", "w0", "w1"),
 }
 
+#: Steps that change the history rather than the canvas. **These are what make a shape script editable
+#: without re-running it**: the TODO entry's complaint was "改一个比例就要重跑整个脚本", and the answer is
+#: that a script can step back over its own earlier steps and try something else in place, so the reader
+#: sees both attempts in one run instead of two files.
+HISTORY_OPS = ("undo", "redo")
+
 
 class SpecError(Exception):
     """A problem with the shape script itself, named by step."""
@@ -151,14 +157,20 @@ def plan_steps(spec):
         if not isinstance(step, dict):
             raise SpecError("step %d: not an object" % i)
         kind = step.get("op")
+        if kind in HISTORY_OPS:
+            count = step.get("count", 1)
+            if not isinstance(count, int) or count < 1:
+                raise SpecError("step %d (%s): count must be a positive integer" % (i, kind))
+            plan.append((kind, {"count": count}))
+            continue
         if kind == "outline":
             if "key" not in step:
                 raise SpecError("step %d (outline): missing key" % i)
             plan.append(("outline", dict(step)))
             continue
         if kind not in SHAPE_ARGS:
-            raise SpecError("step %d: unknown op %r (known: %s, outline)"
-                            % (i, kind, ", ".join(sorted(SHAPE_ARGS))))
+            raise SpecError("step %d: unknown op %r (known: %s, outline, %s)"
+                            % (i, kind, ", ".join(sorted(SHAPE_ARGS)), ", ".join(HISTORY_OPS)))
         missing = [k for k in SHAPE_ARGS[kind] if k not in step]
         if missing:
             raise SpecError("step %d (%s): missing %s" % (i, kind, ", ".join(missing)))
@@ -210,7 +222,16 @@ def cmd_build(a):
 
     spec = json.loads(Path(a.script).read_text(encoding="utf-8"))
     canvas = B.Canvas(spec["width"], spec["height"])
+    applied, undone, redone = 0, 0, 0
     for kind, step in plan_steps(spec):
+        if kind in HISTORY_OPS:
+            hits = sum(1 for _ in range(step["count"]) if getattr(canvas, kind)())
+            if kind == "undo":
+                undone += hits
+            else:
+                redone += hits
+            continue
+        applied += 1
         if kind == "outline":
             canvas.outline(step["key"], diagonal=step.get("diagonal", False))
             continue
@@ -228,6 +249,16 @@ def cmd_build(a):
     if a.preview:
         canvas.preview(scale=8, palette=spec["palette"]).convert("RGB").save(a.preview)
         print("wrote %s (x8, for looking at)" % a.preview)
+    # **A refused undo is reported rather than passed over.** Stepping back further than the history goes
+    # is a mistake in the script, and a run that printed the same thing either way would let a reader
+    # believe an edit had been rolled back when the canvas never moved.
+    if undone or redone:
+        print("history: %d step(s) applied, %d undone, %d redone -> %s"
+              % (applied, undone, redone, ", ".join(canvas.history()[-4:])))
+        wanted = sum(st["count"] for k, st in plan_steps(spec) if k == "undo")
+        if undone < wanted:
+            print("  NOTE: %d of %d undo step(s) did nothing -- the history is shorter than the script "
+                  "assumes" % (wanted - undone, wanted))
     rows = canvas.rows()
     bad = [(i, len(r)) for i, r in enumerate(rows) if len(r) != canvas.width]
     if bad:
