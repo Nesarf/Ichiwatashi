@@ -32,6 +32,7 @@ import math
 __all__ = [
     "lab_from_srgb", "srgb_from_lab", "delta_e_2000", "hyab",
     "oklab_from_srgb", "oklab_distance", "METRICS", "distance",
+    "luma", "intensity_extrema",
 ]
 
 
@@ -208,3 +209,69 @@ def distance(c1, c2, metric: str = "ciede2000") -> float:
         raise ValueError("unknown colour metric %r; known: %s"
                          % (metric, ", ".join(sorted(METRICS)))) from None
     return fn(c1, c2)
+
+
+def luma(colour) -> float:
+    """Rec.601 intensity. Named because the choice changes which pixels a slope test selects."""
+    return 0.299 * colour[0] + 0.587 * colour[1] + 0.114 * colour[2]
+
+
+def intensity_extrema(im, *, max_zeros: int = 2, alpha: bool = True):
+    """The intensity-slope **sign test** of Vysniauskas 2009 -- which does NOT measure anti-aliasing.
+
+    **The name says what it measures, and the name was changed after measuring.** The published rule is:
+    for each pixel, compare its intensity with the eight neighbours in a 3x3 block; the pixel qualifies
+    when those differences contain both signs and no more than `max_zeros` of them are zero. The paper
+    presents it as an anti-aliased-pixel detector, and on pixel art **that is not what it detects**.
+
+    Four measurements, each isolating one claim (`tools/probe_aa_sign.py`, `probe_aa_sign_isolate.py`):
+
+        pure flat field                         0.00% of opaque pixels marked
+        flat field + rounding residue of 1     15.80%    <- fires hard with no slope present
+        1-unit stair, period 8                  0.00%    <- and ignores a real faint slope entirely
+        2-unit stair, period 8                  0.00%
+        a real 2-per-pixel gradient            95.83%
+
+    So it responds to **local extrema** -- peaks and dips in the brightness terrain -- and not to slopes.
+    A one-unit stair is monotone along its run, so the pixel at a step is neither a peak nor a dip and the
+    rule stays silent; and an anti-aliased edge is exactly that kind of monotone slope. What it does fire
+    on is the intermediate values a resampler inserts, because those create reversals: bilinearly
+    resampling twelve real sprites raises the rate from a median of 1.8% to 70.2%, a factor of 8.6.
+
+    **That rise is real information and this function keeps it** -- "was this resampled" is a question
+    worth asking, and `judge.py` already answers a related one under `periodic_class`. What it must not be
+    used for is the label it arrived with. And the failure is not the one the abandoned probe hit:
+    per-pixel or not, this rule does **not** confuse an outline with a smoothing layer -- splitting the
+    corpus by how many colours the outer edge uses gives a median rate of 0.0813 against 0.0814, the same
+    number on both sides.
+
+    Transparent neighbours are skipped rather than treated as zero intensity, because a background is not
+    a brightness; counting it would make every silhouette pixel a slope pixel by construction.
+    """
+    px = im.load()
+    w, h = im.size
+    marked = set()
+    for y in range(1, h - 1):
+        for x in range(1, w - 1):
+            c = px[x, y]
+            if alpha and c[3] == 0:
+                continue
+            ci = luma(c)
+            pos = neg = zero = 0
+            for dy in (-1, 0, 1):
+                for dx in (-1, 0, 1):
+                    if dx == 0 and dy == 0:
+                        continue
+                    n = px[x + dx, y + dy]
+                    if alpha and n[3] == 0:
+                        continue
+                    d = luma(n) - ci
+                    if d > 0:
+                        pos += 1
+                    elif d < 0:
+                        neg += 1
+                    else:
+                        zero += 1
+            if pos and neg and zero <= max_zeros:
+                marked.add((x, y))
+    return marked

@@ -1533,6 +1533,93 @@ class TestPerceptual(unittest.TestCase):
                 px[x, y] = (40 + x * 4, 30 + x * 2, 90, 255)
         return im
 
+    # ---------------------------------------------------------------------------------------------
+    # The sign test, checked against what it actually does rather than what it was published as.
+    # ---------------------------------------------------------------------------------------------
+
+    @staticmethod
+    def _field(jitter=0, step=0, period=8, w=64, h=64, base=40, seed=7):
+        """A flat drawing with a controlled interior: flat, jittered, or stepped in flat bands."""
+        import random as _r
+        rnd = _r.Random(seed)
+        im = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        px = im.load()
+        for y in range(h):
+            for x in range(w):
+                if 8 <= x < w - 8 and 8 <= y < h - 8:
+                    d = ((x - 8) // period) * step if step else 0
+                    if jitter:
+                        d += rnd.randint(-jitter, jitter)
+                    px[x, y] = (base + d, base + d, base + d, 255)
+        return im
+
+    def test_the_sign_test_ignores_a_monotone_slope(self):
+        """It marks nothing on a flat field, and nothing on a one-unit stair either.
+
+        **This is the finding, and it is why the function is not called an anti-aliasing detector.** A
+        stair is monotone along its run, so the pixel at a step is neither a peak nor a dip -- and an
+        anti-aliased edge is exactly that kind of monotone slope. The published rule is presented as an
+        AA detector; on pixel art it is silent where an AA edge would be faintest.
+        """
+        self.assertEqual(len(PC.intensity_extrema(self._field())), 0,
+                         "a flat interior must produce no marks")
+        self.assertEqual(len(PC.intensity_extrema(self._field(step=1))), 0,
+                         "a one-unit stair is a slope, and this rule does not see slopes")
+        self.assertEqual(len(PC.intensity_extrema(self._field(step=2))), 0)
+
+    def test_the_sign_test_fires_on_rounding_residue(self):
+        """And it fires hard on residue, which is the mirror-image failure.
+
+        A flat field carrying plus-or-minus one of rounding noise marks about 16% of its opaque pixels
+        while the one-unit stair above marks 0%. Together the two assertions say what the rule measures:
+        local extrema, not edges.
+        """
+        flat = len(PC.intensity_extrema(self._field()))
+        residue = len(PC.intensity_extrema(self._field(jitter=1)))
+        stair = len(PC.intensity_extrema(self._field(step=1)))
+        self.assertGreater(residue, 0, "residue must fire, or this test is not testing the right thing")
+        self.assertGreater(residue / max(1, flat), 10, "residue must fire far more than a flat field")
+        self.assertEqual(stair, 0, "the slope case must stay silent for the contrast to mean anything")
+
+    def test_the_sign_test_rises_when_a_drawing_is_resampled(self):
+        """So the number is not useless -- it tracks resampling, which is a real question.
+
+        Bilinear resampling inserts intermediate values, and those create the local reversals the rule
+        looks for. Measured on real sprites the rise is 8.6x; a small synthetic case is asserted here so
+        the property is checked without the corpus on disk.
+        """
+        im = Image.new("RGBA", (60, 40), (0, 0, 0, 0))
+        px = im.load()
+        for y in range(6, 34):
+            for x in range(6, 54):
+                px[x, y] = (200, 60, 60, 255)
+        self.assertEqual(len(PC.intensity_extrema(im)), 0, "a solid rectangle has no extrema inside")
+        sm = im.resize((im.width * 2, im.height * 2), Image.BILINEAR).resize(
+            (im.width, im.height), Image.BILINEAR)
+        self.assertGreater(len(PC.intensity_extrema(sm)), 0,
+                           "resampling must produce marks, or the rate means nothing")
+
+    def test_transparent_neighbours_are_not_treated_as_brightness(self):
+        """A background is not an intensity, and counting it would make every edge pixel a slope pixel.
+
+        Reading a transparent pixel's RGB as if it were a value is the obvious mistake, and it would make
+        this rule fire on every silhouette by construction.
+        """
+        im = Image.new("RGBA", (40, 40), (0, 0, 0, 0))
+        px = im.load()
+        for y in range(10, 30):
+            for x in range(10, 30):
+                px[x, y] = (128, 128, 128, 255)
+        self.assertEqual(len(PC.intensity_extrema(im)), 0,
+                         "a flat rectangle beside a transparent margin must not be marked")
+
+    def test_luma_is_the_rec601_form_it_claims(self):
+        """The luma choice changes which pixels a slope test selects, so it is named and asserted."""
+        self.assertAlmostEqual(PC.luma((255, 255, 255)), 255.0, places=6)
+        self.assertAlmostEqual(PC.luma((0, 0, 0)), 0.0, places=6)
+        self.assertAlmostEqual(PC.luma((255, 0, 0)), 0.299 * 255, places=4)
+        self.assertAlmostEqual(PC.luma((0, 255, 0)), 0.587 * 255, places=4)
+
 
 if __name__ == "__main__":
     unittest.main()
