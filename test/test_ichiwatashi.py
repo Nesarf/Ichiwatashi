@@ -893,18 +893,71 @@ class TestFont(unittest.TestCase):
             self.assertEqual(len(h), 14, ch)
             int(h, 16)          # raises if it is not hex, which is the point of the assertion
 
-    def test_the_check_reports_what_is_missing_rather_than_that_it_parsed(self):
-        """The check that caught the real gap: 60 glyphs looked finished and there was no lowercase.
+    def test_the_font_covers_what_a_window_needs(self):
+        """**The check that caught the real gap is now the check that the gap is closed.**
 
-        A font is exactly the asset where 'it parsed and the count is plausible' passes for done.
+        When this font was 60 glyphs it looked finished, and `check_font` said otherwise: no lowercase
+        and no hash. A font is exactly the asset where "it parsed and the count is plausible" passes for
+        done, so the assertion is about coverage rather than about a count -- and it was written to fail
+        while the coverage was incomplete, which is how the shortfall got found.
         """
         from ichiwatashi.font import check_font, load_source
         c = check_font(load_source(self.SRC))
-        self.assertEqual(c["glyphs"], 60)
+        self.assertEqual(c["missing"], "", "a window cannot be written without: %r" % c["missing"])
         self.assertTrue(c["has_space"])
         self.assertEqual(c["distinct_shapes"], 1, "this font is fixed-width, so one shape")
-        # and the gap is named rather than implied
-        self.assertIn("a", c["missing"], "lowercase is absent and the check should say so")
+        self.assertEqual(c["lowercase"], 26, "all 26 lowercase letters")
+
+    def test_the_hash_is_a_glyph_even_though_it_starts_a_comment(self):
+        """**A real collision, not a hypothetical one.**
+
+        `#` begins a comment line and `#` is also a glyph a panel needs -- for a hex dump, a colour, a
+        count. Adding it made the font report it as still missing, because the parser treated the line as
+        a comment. The tab decides: `#` followed by a tab is the glyph.
+        """
+        from ichiwatashi.font import load_source
+        g = load_source(self.SRC)
+        self.assertIn("#", g, "the hash glyph is being read as a comment")
+        self.assertEqual(g["#"].hex(), "15151F151F1515")
+        # and a comment line is still a comment
+        self.assertIn("a", g)
+        for line in self.SRC.read_text(encoding="utf-8").split("\n"):
+            if line.startswith("#") and "\t" not in line:
+                self.assertFalse(line.split("#", 1)[1].strip().startswith("0"),
+                                 "a comment that looks like a glyph line: %r" % line)
+
+    def test_lowercase_sits_where_a_descender_can_still_reach(self):
+        """The render caught this, not an assertion, and the rule turned out to be the reverse of the
+        first one written.
+
+        **The grid decides it, not taste.** The uppercase in the original table fills all seven rows, so
+        inside a 5x7 cell there is no row left below it for a tail -- which is why the lowercase added
+        here sits one row higher: its body ends at row 5 and row 6 is what a descender hangs into.
+
+        **The rule therefore applies to lowercase only, and that is a fact about which glyphs are new.**
+        The uppercase is an existing table in use by a sibling project and is not being changed to suit
+        this test; the assertion holds the new glyphs to the position a descender needs and says nothing
+        about the old ones.
+
+        Two earlier versions of this test were wrong in instructive ways: one demanded ink from the space
+        glyph (fourteen zeroes is what a space is), and one applied the body rule to punctuation, which in
+        the original table runs the full height of the cell because that is what punctuation is for.
+        """
+        from ichiwatashi.font import load_source
+        g = load_source(self.SRC)
+        descenders = set("gjpqy")
+        lowercase = [c for c in g if c.islower()]
+        self.assertEqual(len(lowercase), 26, "the lowercase set is incomplete: %r" % lowercase)
+        for ch in lowercase:
+            low = max(i for i, mask in enumerate(g[ch].rows) if mask)
+            if ch in descenders:
+                # a descender reaches past the body, or it is not a descender
+                self.assertEqual(low, 6, "%r stops at row %d, above its own tail" % (ch, low))
+            else:
+                self.assertLessEqual(low, 5,
+                                     "%r reaches row %d, leaving no room for a descender" % (ch, low))
+        self.assertIsNone(max((i for i, m in enumerate(g[" "].rows) if m), default=None),
+                          "the space glyph has ink in it")
 
 
 class TestScope(unittest.TestCase):

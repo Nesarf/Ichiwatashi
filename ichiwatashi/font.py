@@ -37,14 +37,22 @@ FONT_H = 7
 def parse_source(text: str) -> dict:
     """`{char: glyph}` from the `assets/font5x7.txt` format: one line per glyph, `char TAB hex`.
 
-    Comment lines start with `#`. A space glyph is written as `TAB hex` with an empty first field, so
-    the separator is the tab and not a split on whitespace -- `line.split()` would eat the space key
-    and the font would come back a glyph short with nothing to say so.
+    **`#` is both the comment marker and a glyph, and the tab decides between them**: a line whose first
+    character is `#` and whose second is a tab is the hash glyph; anything else beginning with `#` is a
+    comment. This collision is not hypothetical -- it was found by adding the hash and watching the font
+    report it as still missing. The alternative was to drop the glyph, and a window showing a hex dump
+    or a colour needs it.
+
+    A space glyph is written as `TAB hex` with an empty first field, so the separator is the tab and not
+    a split on whitespace -- `line.split()` would eat the space key and the font would come back a glyph
+    short with nothing to say so.
     """
     out = {}
     for n, raw in enumerate(text.split("\n"), 1):
         line = raw.rstrip("\r")
-        if not line.strip() or line.lstrip().startswith("#"):
+        if not line.strip():
+            continue
+        if line.startswith("#") and line[:2] != "#\t":
             continue
         if "\t" not in line:
             raise ValueError("line %d has no tab, so a space glyph cannot be told from a bad line: %r"
