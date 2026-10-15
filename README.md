@@ -16,7 +16,7 @@ falsified two of its own assumptions immediately:**
 
 | Assumption | What the measurement said |
 |---|---|
-| "Fewer isolated pixels is better" | A real 72×113 fighting-game frame had **10.1%** isolated pixels — 312 of them — against **1.35%** in a hand attempt. The good sprite looked worse **because the count was absolute and the sprites were different sizes.** As a rate the good sprite is *dirtier* still, and correctly so: at 21 colours across 546 clusters, those pixels **are the detail** — single-pixel highlights, eyes, cloth texture. So the metric needs a rate **and** a cluster shape to tell noise from detail, and a rate-only rule raises a false positive on known-good art. |
+| "Fewer isolated pixels is better" | A real 72乘113 fighting-game frame had **10.1%** isolated pixels — 312 of them — against **1.35%** in a hand attempt. The good sprite looked worse **because the count was absolute and the sprites were different sizes.** As a rate the good sprite is *dirtier* still, and correctly so: at 21 colours across 546 clusters, those pixels **are the detail** — single-pixel highlights, eyes, cloth texture. So the metric needs a rate **and** a cluster shape to tell noise from detail, and a rate-only rule raises a false positive on known-good art. |
 | "One consistent outline colour is disciplined" | The good sprite scored **0.662** and the hand attempt **0.991** — so the metric was inverted. **And then the inversion was wrong as well, which is the more useful half of the lesson.** Pointed at 161 real TH155 sprites that number has a median of **0.003** — they are *all* flat — while TH123 sits at 0.726. Two generations of correct work. So it was never measuring discipline: it was measuring **how many colours the character's palette has**, which is why one pipeline scored futo 0.055 and hijiri exactly 0.000. It is now two quantities, `outline_variation` and `outline_predictability`, and `outline_style()` names the style (flat / systematic / noisy) **without grading it**. `corpus/AESTHETICS.md` records the published technique this corresponds to — 「セルアウト」, where an outline is the body's own colour darkened, which is what a near-1.0 predictability means. |
 
 **Both of those would have been trained into a model as ground truth**, and neither is visible without
@@ -45,7 +45,7 @@ good work is a report that gets ignored.
 Two things fell out of the distribution that a single sample could not have shown:
 
 - **The old isolated-pixel rule fired above 5%, which is below the fifth percentile of real sprites.**
-  Real art sits at 7.4–16%. Both of the 32×32 attempts were wrong in *opposite* directions — one at
+  Real art sits at 7.4–16%. Both of the 32乘32 attempts were wrong in *opposite* directions — one at
   15.4% (fragmented) and one at 1.35% (too coherent, and flagged by a high bounding-box fill instead).
   **A "lower is better" rule can only ever see one of those two failures.**
 - **Real sprites use 26 colours at the median.** Both attempts used 10 and 12, which is a real gap and
@@ -160,7 +160,7 @@ A shape script:
 ```
 
 **Why shapes rather than placing pixels.** Authoring a grid by hand requires already having a finished
-silhouette in mind, which is the skill being learned. Two hand attempts at 32×32 produced blocks that
+silhouette in mind, which is the skill being learned. Two hand attempts at 32乘32 produced blocks that
 were not recognisable. The same sprite as a cone, a disc and a trapezoid was readable on the second
 attempt — because **getting a proportion wrong became editing three numbers instead of re-placing
 hundreds of pixels**, and iterating is what converges.
@@ -221,7 +221,7 @@ rather than a paragraph:
 
 - `silhouette_share` is **1.000** on a single-colour form. That reads as "a uniform edge" and means
   nothing — every edge pixel is that colour by construction.
-- The whole metric set on a 5×7 bitmap font. Measured over all 58 glyphs of `volcano-separator`'s
+- The whole metric set on a 5乘7 bitmap font. Measured over all 58 glyphs of `volcano-separator`'s
   self-drawn pixel font: `colours_used` **1** against a band of 16–37, `isolated_rate` **0.000**
   against 0.074–0.160. Every glyph came back flagged as unlike any reference generation. A font and a
   fighting sprite are not the same kind of object, and nothing had said so.
