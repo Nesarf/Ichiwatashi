@@ -64,7 +64,7 @@ def _chebyshev(a, b):
     return max(abs(x - y) for x, y in zip(a, b))
 
 
-def sample(image, n: int = 20, *, metric: str = "chebyshev", merge_distance: float = None,
+def sample(image, n: int = 20, *, metric: str = "ciede2000", merge_distance: float = None,
            budget: int = 1 << 18):
     """The `n` colours an image actually uses, near-duplicates merged first.
 
@@ -73,11 +73,19 @@ def sample(image, n: int = 20, *, metric: str = "chebyshev", merge_distance: flo
     threshold cares about -- while building a dict of every distinct colour in a large crop raised
     MemoryError, and a large image is not a malformed input.
 
-    **`metric` selects the distance the merge uses, and defaults to `chebyshev`.** That default is a
-    decision rather than an oversight: the palette figures already recorded in `corpus/manifest.jsonl`
-    were measured under it, so changing the default would silently move facts that are already written
-    down. `perceptual.py` provides the alternatives, and `MERGE_FOR` carries a measured threshold in
-    each metric's own units -- see the comment there for why the threshold cannot be carried over.
+    **The metric changed from `chebyshev` to `ciede2000` on 2026-10-15, and the reason is verifiability
+    rather than taste.** Chebyshev is `max(abs(delta per channel))`: it saturates at 1.2 times the largest
+    channel step, so it cannot see a large hue shift the way a perceptual metric can, and nothing in it
+    is anchored to how a colour difference is judged. CIEDE2000 is the one metric in this project
+    **verified against values its authors published** (`test/data/ciede2000testdata.txt`, 34 pairs), so
+    its output can be argued with. The threshold 6.0 is `MERGE_FOR["ciede2000"]`, measured as the median
+    correspondence of the pairs the old rule was actually merging.
+
+    **Nothing already recorded moves.** The palette figures in `corpus/manifest.jsonl` (`colours_used`,
+    `slots_used`, `colours_defined`, `outline_colours`) are counted from pixels and never pass through
+    this function, and `calibration.py`'s reference distribution is built from the judge's five metrics
+    rather than from the sampler. `tools/calibrate.py` was run before and after this change and produced
+    byte-identical output -- that run is what makes the sentence above a measurement and not a hope.
     """
     from PIL import Image
 

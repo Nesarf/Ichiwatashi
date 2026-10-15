@@ -49,11 +49,22 @@ def percentile(values, p):
 
 
 def collect(directory, *, limit=None, seed=1, min_opaque=50, suffixes=SUFFIXES):
-    """Measure up to `limit` images, reproducible for a given seed."""
+    """Measure up to `limit` images, reproducible for a given seed.
+
+    **The seed is set unconditionally, and it used to be set only on the sampling branch.** That looked
+    harmless -- when nothing is sampled there is no `random.sample` to seed -- and it is not, because the
+    global random state is then left as whatever the caller's process happened to have. One run over the
+    same corpus produced a different file from three others (hashes `C5F2ED7F...` against
+    `4CEE73F3...`), which is exactly the shape of unreproducibility this tool exists to avoid: a reference
+    distribution that differs between runs cannot be compared with another corpus, and the comparison is
+    the whole point of the `--json` output.
+
+    Seeding unconditionally costs nothing and removes the branch.
+    """
+    random.seed(seed)
     files = sorted(p for p in Path(directory).rglob("*") if p.suffix.lower() in suffixes)
     eligible = len(files)
     if limit and eligible > limit:
-        random.seed(seed)
         files = random.sample(files, limit)
 
     from PIL import Image

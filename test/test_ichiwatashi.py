@@ -1494,12 +1494,27 @@ class TestPerceptual(unittest.TestCase):
         with self.assertRaises(ValueError):
             PC.distance(a, b, "deltae2000")
 
-    def test_the_sampler_still_defaults_to_chebyshev(self):
-        """The default is a decision, not an oversight: the palette figures already in
-        `corpus/manifest.jsonl` were measured under Chebyshev, so moving the default would silently move
-        recorded facts. The alternative metrics are opt-in."""
+    def test_the_samplers_default_metric_is_ciede2000(self):
+        """The default is a decision, and the decision changed on 2026-10-15.
+
+        It was `chebyshev` because the palette figures in `corpus/manifest.jsonl` had been measured under
+        it. It is now `ciede2000` because that is the one metric in this project verified against values
+        its authors published, so its output can be argued with -- and because nothing already recorded
+        moved: those manifest figures are counted from pixels and never pass through the sampler, and
+        `tools/calibrate.py` produces a byte-identical distribution under either default (checked by
+        running it both ways, which is why the claim is a measurement).
+
+        **This test used to be named `..._still_defaults_to_chebyshev` and it kept passing after the
+        change** -- on this small fixture both metrics happen to return the same count, so the name was
+        the only thing that had gone stale. A test whose name lies about what it checks is the failure
+        this suite keeps having to correct, so the assertion is now about the default being the verified
+        metric rather than about a group count that cannot tell them apart.
+        """
         im = self._ramp()
-        self.assertEqual(P.sample(im, n=6).__len__(), P.sample(im, n=6, metric="chebyshev").__len__())
+        self.assertEqual(P.sample(im, n=6), P.sample(im, n=6, metric="ciede2000"),
+                         "the bare call must be the ciede2000 call")
+        self.assertEqual(P.sample(im, n=6, merge_distance=None),
+                         P.sample(im, n=6, metric="ciede2000", merge_distance=P.MERGE_FOR["ciede2000"]))
         with self.assertRaises(ValueError):
             P.sample(im, n=6, metric="lab")           # not one of MERGE_FOR's names
 
