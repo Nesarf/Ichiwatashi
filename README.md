@@ -97,6 +97,33 @@ pip install -e .
 Pillow is a hard dependency: a tool that reads and writes images and cannot open a PNG is broken, not
 degraded.
 
+## Figures
+
+```bash
+ichiwatashi figures sprite.png --out figures/ --scale 6 --colours 16
+```
+
+Four pixel-art figures — the sampled palette, the silhouette, the outline study, and this sprite's
+metrics against the shipped reference bands. **Every one is drawn with this repository's own tools**:
+`builder`'s shapes and `font`'s glyphs, never a plotting library. The family rule is that this project's
+assets are pixel art, and for a measuring tool that has a second edge — *if a figure cannot be drawn with
+the tool's own verbs, the tool has a gap, and importing a drawing library would hide it.*
+
+The output path is one way only: a canvas at one pixel per pixel, then an integer `NEAREST` upscale. A
+figure that had been resampled would be lying about the pixels it shows, so the renderer is asserted to
+invent no colour: every pixel in a figure comes from the figure's own key table.
+
+Two layout decisions were forced by reading the pixels back rather than by looking:
+
+- **A swatch needs a field-coloured pad.** The ring on each swatch is its own darker step, which is the
+  `outline_predictability` relation drawn instead of tabulated — and for a near-black colour that derives
+  a near-black ring, so one swatch in a sixteen-colour board had no edge at all. The pad guarantees a
+  boundary whatever the colours are.
+- **A bar chart needs a span per row.** Three judge metrics on one shared scale measure 43.0, 0.115 and
+  0.41; the first filled the plot and the other two were invisible. Each row is now drawn inside its own
+  reference band with the shipped reference marked on it, which is the comparison `tools/calibrate.py`
+  prints as text.
+
 ## Use
 
 ### Measure

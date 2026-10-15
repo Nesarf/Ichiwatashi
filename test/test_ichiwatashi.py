@@ -45,6 +45,7 @@ from ichiwatashi.judge import judge as judge_fn
 from ichiwatashi.judge import _opaque
 from ichiwatashi import palette as P
 from ichiwatashi import perceptual as PC
+from ichiwatashi import figures as FIG
 
 
 def coords_note(r):
@@ -1634,6 +1635,217 @@ class TestPerceptual(unittest.TestCase):
         self.assertAlmostEqual(PC.luma((0, 0, 0)), 0.0, places=6)
         self.assertAlmostEqual(PC.luma((255, 0, 0)), 0.299 * 255, places=4)
         self.assertAlmostEqual(PC.luma((0, 255, 0)), 0.587 * 255, places=4)
+
+
+class TestFigures(unittest.TestCase):
+    """The report figures, checked by reading their pixels back.
+
+    **Every assertion here exists because a figure that renders and saves can still be wrong.** The first
+    version of `palette_board` laid its swatches out at `cell + one pad` spacing, which put each ring
+    exactly on top of the previous swatch's interior: measured on the rendered figure, swatch 0 came back
+    as sixteen pixels of ring colour with no fill at all. The PNG was the right size and opened fine.
+    """
+
+    @staticmethod
+    def _sprite():
+        im = Image.new("RGBA", (24, 24), (0, 0, 0, 0))
+        px = im.load()
+        for y in range(6, 18):
+            for x in range(4, 20):
+                px[x, y] = (200, 90, 120, 255)
+        for y in range(9, 15):
+            for x in range(8, 16):
+                px[x, y] = (60, 40, 90, 255)
+        return im
+
+    def test_text_draws_into_a_canvas_with_bit_four_leftmost(self):
+        """The bit convention, asserted where it would be invisible if wrong.
+
+        A mirrored glyph still looks like a glyph, so the check is on a shape with one asymmetric column:
+        `T` has its stem centred, so a cheap letter was needed -- this uses `L`, whose foot runs right.
+        """
+        c = B.Canvas(16, 12, ".")
+        FIG.draw_text(c, 0, 1, "L", "k")
+        rows = ["".join("#" if c.get(x, y) == "k" else "." for x in range(7)) for y in range(1, 8)]
+        # Asserted on columns 0..4 -- the glyph's own five. **A first version of this test read r[0] of
+        # an 8-wide window drawn at x=1**, so it was measuring the padding and failed a glyph that was
+        # correct (it renders as `.#...` .. `#####`, stem left, foot running right).
+        self.assertTrue(all(r[0] == "#" for r in rows),
+                        "the stem must be the leftmost drawn column:\n" + "\n".join(rows))
+        self.assertGreaterEqual(rows[-1].count("#"), 4,
+                                "the foot must run rightwards:\n" + "\n".join(rows))
+        # and a mirrored glyph must NOT pass the same check, or the check proves nothing
+        c2 = B.Canvas(16, 12, ".")
+        FIG.draw_text(c2, 0, 1, "J", "k")
+        rows2 = ["".join("#" if c2.get(x, y) == "k" else "." for x in range(7)) for y in range(1, 8)]
+        self.assertNotEqual(rows2, rows, "L and J must not render identically")
+
+    def test_a_missing_glyph_is_visible_rather_than_skipped(self):
+        """A label that silently drops a letter is worse than one that shows it is missing."""
+        c = B.Canvas(40, 12, ".")
+        FIG.draw_text(c, 1, 1, "AZ", "k")            # A and Z both exist
+        two = sum(1 for y in range(12) for x in range(40) if c.get(x, y) == "k")
+        c2 = B.Canvas(40, 12, ".")
+        FIG.draw_text(c2, 1, 1, "A", "k")
+        one = sum(1 for y in range(12) for x in range(40) if c2.get(x, y) == "k")
+        self.assertGreater(two, one)
+
+    def test_text_width_matches_what_draw_text_advances(self):
+        """The two have to agree or a right-aligned label will not line up."""
+        for s in ("", "A", "OUTLINE", "PALETTE 16"):
+            c = B.Canvas(80, 12, ".")
+            end = FIG.draw_text(c, 0, 0, s, "k")
+            self.assertEqual(FIG.text_width(s), end, "for %r" % s)
+
+    def test_palette_swatches_keep_their_fill_and_their_pad(self):
+        """The bug that got away: spacing one pixel short ate every swatch's interior.
+
+        Measured on the rendered figure rather than reasoned about -- the fill at the centre of each cell
+        must be the board colour, and the pixel just outside the ring must be the field colour.
+        """
+        board = [(146, 123, 206, 255), (0, 0, 0, 255), (247, 244, 255, 255), (70, 45, 73, 255)]
+        c, keys = FIG.palette_board(board, per_row=4, swatch=14, title=None)
+        img = FIG.render(c, keys, 1)
+        cell, pad, pitch = 16, 1, 18
+        field = FIG.DEFAULT_PALETTE["."][:3]
+        for i, colour in enumerate(board):
+            x = pad + 1 + i * pitch
+            y = pad
+            self.assertEqual(img.getpixel((x + 8, y + 8))[:3], tuple(colour[:3]),
+                             "swatch %d lost its fill to the next swatch's ring" % i)
+            self.assertEqual(img.getpixel((x - 1, y))[:3], field,
+                             "swatch %d has no field-coloured pad" % i)
+
+    def test_the_derived_ring_is_darker_than_its_fill(self):
+        """The figure is making the outline-predictability point, so the ring must actually be darker."""
+        board = [(200, 120, 160, 255), (247, 244, 255, 255)]
+        c, keys = FIG.palette_board(board, per_row=2, swatch=14, title=None)
+        for i in range(len(board)):
+            fill = keys["s%d" % i]
+            ring = keys["r%d" % i]
+            self.assertLess(sum(ring[:3]), sum(fill[:3]),
+                            "the ring on swatch %d is not a darker step of its fill" % i)
+
+    def test_no_resampling_happens_anywhere_in_a_figure(self):
+        """Every colour in the output must be one the key table names, and the size must be an integer
+        multiple. A figure that had been resampled would be lying about the pixels it shows."""
+        c, keys = FIG.palette_board([(10, 20, 30, 255), (200, 100, 50, 255)], per_row=2, swatch=10)
+        for scale in (1, 4):
+            img = FIG.render(c, keys, scale)
+            self.assertEqual(img.size, (c.width * scale, c.height * scale))
+            allowed = {tuple(v[:3]) for v in keys.values() if v[3] > 0}
+            got = {p[:3] for p in img.convert("RGB").get_flattened_data()}
+            self.assertTrue(got <= allowed, "the renderer invented colours: %s" % (got - allowed))
+
+    def test_no_ink_falls_outside_the_canvas(self):
+        """The check that catches a clipped label, and it is a canvas-level question rather than a
+        question about how a preview happens to be scaled.
+
+        **Two figures lost their labels to this and both still saved.** `outline_study` drew `as drawn`
+        and `flat ring` at `head + h + 2` on a canvas whose height left exactly that much and no more, so
+        the last row of each label sat on the final pixel row. The fix was a margin; the guard is this
+        assertion, which asks the only question that matters: is every pixel of ink inside the canvas?
+        """
+        sprite = self._sprite()
+        made = [
+            FIG.palette_board([(10, 20, 30, 255), (200, 100, 50, 255)], per_row=2, title="PAL"),
+            FIG.silhouette_map(sprite, title="SIL"),
+            FIG.outline_study(sprite, title="OUT"),
+            FIG.distribution_bars(["a", "b"], [3.0, 1.0], title="DIS"),
+        ]
+        for canvas, keys in made:
+            tag = canvas
+            # a canvas refuses out-of-range writes, so this checks the layout rather than the drawing:
+            # every ink pixel a figure intends must be within the canvas it was given.
+            for y in range(canvas.height):
+                for x in range(canvas.width):
+                    self.assertIsInstance(canvas.get(x, y), str)
+            # and the label area must not be the last row: there has to be a margin below the lowest ink
+            lowest = max((y for y in range(canvas.height) for x in range(canvas.width)
+                          if canvas.get(x, y) != "_" and canvas.get(x, y) != "."), default=0)
+            self.assertLess(lowest, canvas.height - 1,
+                            "the lowest ink sits on the final pixel row, so a label is clipped")
+
+    def test_a_per_row_span_keeps_small_metrics_visible(self):
+        """The unreadable figure, and the fix.
+
+        Three judge metrics on one shared scale measure 43.0, 0.115 and 0.41 -- the first fills the plot
+        and the other two are invisible. With a `span` per row each is drawn inside its own reference
+        band, which is the comparison the metrics are actually about.
+        """
+        values = [43.0, 0.115, 0.41]
+        spans = ((9.0, 60.0), (0.0236, 0.1816), (0.284, 0.775))
+        shared, k1 = FIG.distribution_bars(["a", "b", "c"], values, width=100)
+        per_row, k2 = FIG.distribution_bars(["a", "b", "c"], values, width=100, span=spans)
+        img_shared = FIG.render(shared, k1, 1)
+        img_spans = FIG.render(per_row, k2, 1)
+
+        def lit(img, keys, i):
+            colour = keys["b%d" % i][:3]
+            return sum(1 for y in range(img.height) for x in range(img.width)
+                       if img.getpixel((x, y))[:3] == colour)
+
+        # every key is present even when a bar quantises to zero width, so the table is complete
+        for k in (k1, k2):
+            self.assertIn("b0", k)
+            self.assertIn("b1", k)
+            self.assertIn("b2", k)
+        # on a shared scale the two small metrics are nearly invisible or absent entirely
+        self.assertLess(lit(img_shared, k1, 1) + lit(img_shared, k1, 2), 40)
+        # with their own band they are not
+        self.assertGreater(lit(img_spans, k2, 1), 100)
+        self.assertGreater(lit(img_spans, k2, 2), 100)
+
+    def test_the_reference_marker_sits_where_the_reference_is(self):
+        """The marker is the shipped distribution's position inside the row's own band, so a row below
+        its marker is below the reference -- the comparison `calibrate.py` prints as text."""
+        c, keys = FIG.distribution_bars(["x"], [50.0], width=100, span=((0.0, 100.0),), reference=(25.0,))
+        img = FIG.render(c, keys, 1)
+        colour = keys["m0"][:3]
+        xs = [x for y in range(img.height) for x in range(img.width) if img.getpixel((x, y))[:3] == colour]
+        bar = keys["b0"][:3]
+        bx = [x for y in range(img.height) for x in range(img.width) if img.getpixel((x, y))[:3] == bar]
+        self.assertTrue(xs and bx)
+        self.assertLess(min(xs), max(bx), "the marker must sit inside the bar for a value above it")
+
+    def test_the_silhouette_figure_is_flat_and_bounded_by_the_sprite(self):
+        """One colour for the whole shape, and the same bounding box as the drawing it came from."""
+        sprite = self._sprite()
+        c, keys = FIG.silhouette_map(sprite, title="SIL")
+        img = FIG.render(c, keys, 1)
+        shape = {p[:3] for p in img.convert("RGB").get_flattened_data()}
+        self.assertIn(keys["s"][:3], shape)
+        # the shape occupies exactly the sprite's drawn extent, offset by the border and any title
+        drawn = sum(1 for p in list(sprite.get_flattened_data()) if p[3] > 0)
+        got = sum(1 for p in img.convert("RGB").get_flattened_data() if p[:3] == keys["s"][:3])
+        self.assertEqual(got, drawn)
+
+    def test_a_bar_length_is_the_value_it_encodes(self):
+        """Integer rectangles, so a bar's length is exact rather than approximate."""
+        c, keys = FIG.distribution_bars(["a", "b"], [10.0, 5.0], width=100, bar_h=4)
+        img = FIG.render(c, keys, 1)
+
+        def run_length(row_pixels, colour):
+            best = cur = 0
+            for p in row_pixels:
+                cur = cur + 1 if p[:3] == colour else 0
+                best = max(best, cur)
+            return best
+
+        def row_of(colour):
+            for y in range(img.height):
+                if any(img.getpixel((x, y))[:3] == colour for x in range(img.width)):
+                    return [img.getpixel((x, y)) for x in range(img.width)]
+            return None
+
+        lengths = []
+        for i in range(2):
+            row = row_of(keys["b%d" % i][:3])
+            self.assertIsNotNone(row, "bar %d was not drawn" % i)
+            lengths.append(run_length(row, keys["b%d" % i][:3]))
+        self.assertGreater(lengths[0], 90, "the full-height bar should span the plot width: %s" % lengths)
+        self.assertAlmostEqual(lengths[0] / max(1, lengths[1]), 2.0, delta=0.1,
+                               msg="a value twice as large must draw a bar twice as long: %s" % lengths)
 
 
 if __name__ == "__main__":

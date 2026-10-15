@@ -269,6 +269,53 @@ def cmd_frames(a):
     return 0
 
 
+def cmd_figures(a):
+    """Draw the report figures for one sprite.
+
+    **Every figure is drawn with this repository's own tools** -- `builder`'s shapes and `font`'s glyphs,
+    never a plotting library. The family rule is that this project's assets are pixel art, and for a
+    measuring tool that has a second edge the TODO entry spells out: if a figure cannot be drawn with the
+    tool's own verbs, the tool has a gap, and importing a drawing library would hide it.
+
+    The output path is one way only: a canvas at one pixel per pixel, then an integer `NEAREST` upscale.
+    A figure that had been resampled would be lying about the pixels it shows.
+    """
+    from PIL import Image
+    from . import figures as FIG
+    from . import palette as P
+    from .judge import judge
+
+    src = Image.open(a.image).convert("RGBA")
+    out = Path(a.out)
+    out.mkdir(parents=True, exist_ok=True)
+    board = P.sample(src, n=a.colours)
+    r = judge(src)
+
+    written = []
+    for name, (canvas, keys), scale in (
+        ("palette", FIG.palette_board(board, title="PALETTE %d" % len(board)), a.scale),
+        ("silhouette", FIG.silhouette_map(src, title="SILHOUETTE"), max(2, a.scale // 3)),
+        ("outline", FIG.outline_study(src, title="OUTLINE"), max(2, a.scale // 3)),
+    ):
+        p = out / ("%s.png" % name)
+        FIG.render(canvas, keys, scale).convert("RGB").save(p)
+        written.append(p)
+    # a distribution figure only means something with more than one sample, so it is drawn from the
+    # sprite's own metrics against the shipped bands rather than faked from a single row
+    labels = ["colour", "isolated", "fill"]
+    values = [float(r.colours_used), r.isolated_rate, r.bbox_fill]
+    spans = ((9.0, 60.0), (0.0236, 0.1816), (0.284, 0.775))
+    refs = (26.0, 0.116, 0.538)
+    canvas, keys = FIG.distribution_bars(labels, values, title="THIS SPRITE", span=spans, reference=refs)
+    p = out / "distribution.png"
+    FIG.render(canvas, keys, max(3, a.scale // 2)).convert("RGB").save(p)
+    written.append(p)
+    for p in written:
+        im = Image.open(p)
+        print("wrote %s  %d x %d" % (p, im.width, im.height))
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="ichiwatashi", description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -326,6 +373,15 @@ def main(argv=None):
                    help="report a drift spread from fewer frames than the measurement needs, as an "
                         "uncalibrated number")
     f.set_defaults(func=cmd_frames)
+
+    fg = sub.add_parser("figures", help="draw the report figures for a sprite, in pixel art")
+    fg.add_argument("image")
+    fg.add_argument("--out", default="figures", help="directory for the PNGs (default: ./figures)")
+    fg.add_argument("--scale", type=int, default=6,
+                    help="integer upscale; the figures are drawn at 1 pixel per pixel and enlarged with "
+                         "NEAREST, so this cannot resample")
+    fg.add_argument("--colours", type=int, default=16, help="how many palette swatches to draw")
+    fg.set_defaults(func=cmd_figures)
 
     a = ap.parse_args(argv)
     return a.func(a)
