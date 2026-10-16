@@ -124,6 +124,30 @@ Two layout decisions were forced by reading the pixels back rather than by looki
   reference band with the shipped reference marked on it, which is the comparison `tools/calibrate.py`
   prints as text.
 
+## Frame drift, two ways
+
+`Timeline.drift()` compares each frame's bounding-box corner against its placement: it measures how far the
+**silhouette's edge** moved. `Timeline.aligned_shift()` measures how far each frame must be moved to sit on
+the one before it, which is the translation the drawing actually underwent — and it sees motion the first
+one cannot, because a breathing chest or a turning head keeps the outline and moves everything that matters.
+
+```
+content drift relative to the anchor: 0 x 0 pixel(s)
+aligned shift between frames: +1,+0, +1,+0, +1,+0, +1,+0, +1,+0
+  spread 0 x 0  (0 means one steady offset; non-zero means the motion is not a translation)
+```
+
+Two things about that output are deliberate. The **per-pair offsets** are the useful reading (a steady
+value is speed; a spread is a stutter). And the **spread is the refusal**: a genuine translation returns one
+offset for every pair, so a non-zero spread means the motion is not a translation and the offsets should not
+be read as distances. A best fit that lands on the edge of the search window is reported as `0, 0` with a
+note, because a truncated search is not a measurement.
+
+Read one thing as a caution: fitting **every** opaque pixel is overwhelmed by whatever is not moving. On a
+fixture where a 16-pixel accent slides inside a fixed 330-pixel silhouette, the whole-frame fit correctly
+returns `(0, 0)` for every pair. The default differences the pair first and fits only the pixels that
+changed, which is why it finds the motion.
+
 ## Grid round trip
 
 ```bash

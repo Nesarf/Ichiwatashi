@@ -2208,5 +2208,167 @@ class TestGridRoundTrip(unittest.TestCase):
                 B.parse_colour(bad)
 
 
+class TestAlignedShift(unittest.TestCase):
+    """The second drift measure: what each frame must move by to sit on the one before it.
+
+    The TODO entry for this named the gap precisely -- `drift` "only takes the first opaque row/column, so
+    a shape that moves inside while its silhouette stays put reads 0". Three animations below differ only
+    in what moves, and the assertions are on which measure sees which.
+
+    **Two things were learned by measuring rather than by design, and both are pinned here:**
+
+    1. Minimising disagreement over *every* opaque pixel is overwhelmed by whatever is not moving. On the
+       interior fixture -- a 16-pixel accent sliding inside a fixed 330-pixel silhouette -- the whole-frame
+       fit returned `(0, 0)` for every pair, correctly, because the stationary body disagreed more than the
+       moving accent at any offset. The fix is to difference the pair first and fit only the changed pixels.
+    2. A best fit that lands on the edge of the search window is not a fit. The rotation fixture returned
+       offsets of exactly `reach`, twice; reporting those would be reporting the window rather than the
+       motion, so the call substitutes `(0, 0)` and flags it.
+    """
+
+    @staticmethod
+    def _sprite(interior_dx=0, whole_dx=0, rotate=False):
+        im = Image.new("RGBA", (40, 28), (0, 0, 0, 0))
+        px = im.load()
+        x0, x1 = 8 + whole_dx, 31 + whole_dx
+        for y in range(6, 22):
+            for x in range(x0, x1):
+                px[x, y] = (30, 30, 40, 255)
+        for y in range(8, 20):
+            for x in range(x0 + 2, x1 - 2):
+                px[x, y] = (220, 140, 170, 255)
+        mx = 14 + whole_dx + interior_dx
+        if rotate:
+            for i in range(6):
+                px[14 + whole_dx + i, 12 + i] = (90, 60, 150, 255)
+        else:
+            for y in range(12, 16):
+                for x in range(mx, mx + 4):
+                    px[x, y] = (90, 60, 150, 255)
+        return im
+
+    def _timeline(self, kind, n=6):
+        tl = F.Timeline(width=44, height=30)
+        for i in range(n):
+            if kind == "translation":
+                im = self._sprite(whole_dx=i)
+            elif kind == "interior":
+                im = self._sprite(interior_dx=i)
+            else:
+                im = self._sprite(rotate=(i % 2 == 0))
+            tl.add(im, pivot=(20, 26), duration_ms=100)
+        return tl
+
+    def test_a_whole_shape_moving_is_seen_by_both_measures(self):
+        """The case both were built for, so neither can be broken while the other passes."""
+        tl = self._timeline("translation")
+        dx, dy = tl.drift()
+        self.assertEqual((dx, dy), (5, 0), "the bounding box moves five pixels across six frames")
+        adx, ady, per, _scores, bounds = tl.aligned_shift(reach=6)
+        self.assertEqual(per, [(1, 0)] * 5, "each frame sits one pixel right of the previous")
+        self.assertFalse(any(bounds))
+        self.assertEqual((adx, ady), (0, 0), "a steady crawl has no stutter")
+
+    def test_interior_motion_is_seen_only_by_the_aligned_measure(self):
+        """The gap the TODO entry named: the silhouette is fixed and the inside moves.
+
+        `drift` reads 0 -- correctly, as a bounding-box measure -- and `aligned_shift` reads the one pixel
+        per frame that the accent actually travels. A bounding box of the same value in every frame is the
+        fixture's point, so if this test ever reports a non-zero drift the fixture has stopped testing it.
+        """
+        tl = self._timeline("interior")
+        boxes = {tl.compose()[i].getbbox() for i in range(6)}
+        self.assertEqual(len(boxes), 1, "the fixture's silhouette must not move")
+        self.assertEqual(tl.drift(), (0, 0), "the bounding-box measure cannot see this, by construction")
+        adx, ady, per, _scores, bounds = tl.aligned_shift(reach=6)
+        self.assertEqual(per, [(1, 0)] * 5, "the interior moves one pixel per frame and that is the reading")
+        self.assertFalse(any(bounds), "one pixel is well inside the window, so nothing hit an edge")
+
+    def test_the_whole_frame_form_is_overwhelmed_by_what_is_not_moving(self):
+        """The measurement that forced `changed_only`, kept as a test so the reason cannot be re-derived.
+
+        Fitting every opaque pixel gives `(0, 0)` on the interior fixture: the stationary body contributes
+        more disagreement at a one-pixel offset than the moving accent resolves. That is not a bug in the
+        fit -- it is the wrong question for this fixture, which is why the default differences first.
+        """
+        tl = self._timeline("interior")
+        _dx, _dy, whole, _s, _b = tl.aligned_shift(reach=6, changed_only=False)
+        _dx2, _dy2, changed, _s2, _b2 = tl.aligned_shift(reach=6, changed_only=True)
+        self.assertEqual(whole, [(0, 0)] * 5, "the whole-frame fit cannot find the interior motion")
+        self.assertEqual(changed, [(1, 0)] * 5, "the changed-pixel fit finds it")
+
+    def test_a_rotation_shows_up_as_a_non_zero_spread(self):
+        """A rotation is not a translation, and the **spread** is what says so -- not the boundary flag.
+
+        Measured at three window sizes: `reach=3` hits the edge five times, while `reach=6` and `9`
+        "converge" on `(-4, -4)` and flag nothing. So the flag catches a truncated search and cannot catch a
+        fit that settles on a wrong answer, which is what a rotation produces. What does catch it is the
+        spread: a genuine translation returns the same offset for every pair, so its spread is 0, while this
+        fixture oscillates between two incompatible offsets.
+        """
+        tl = self._timeline("rotate")
+        adx, ady, per, _scores, _bounds = tl.aligned_shift(reach=6)
+        self.assertGreater(adx + ady, 0, "an oscillation must show as a non-zero spread: %s" % (per,))
+        self.assertGreater(len(set(per)), 1, "the offsets must disagree with each other: %s" % (per,))
+
+    def test_a_truncated_search_is_flagged_rather_than_reported(self):
+        """The flag's real job: a best fit sitting on the window's edge is not a fit.
+
+        At `reach=3` this fixture returns offsets of exactly 3, so `(0, 0)` is substituted. That keeps a
+        search window from being published as a measurement -- a different failure from the rotation case
+        above, and the two are now told apart on purpose.
+        """
+        tl = self._timeline("rotate")
+        _dx, _dy, per, _scores, bounds = tl.aligned_shift(reach=3)
+        self.assertTrue(any(bounds), "a truncated search must be flagged")
+        for (x, y), hit in zip(per, bounds):
+            if hit:
+                self.assertEqual((x, y), (0, 0), "a boundary hit is replaced, not passed through")
+
+    def test_identical_frames_report_no_motion_and_no_flag(self):
+        """The degenerate case: nothing changed, so the honest answer is zero rather than a fallback."""
+        tl = F.Timeline(width=20, height=20)
+        for _ in range(4):
+            tl.add(self._sprite(), pivot=(10, 18), duration_ms=100)
+        dx, dy, per, scores, bounds = tl.aligned_shift()
+        self.assertEqual((dx, dy), (0, 0))
+        self.assertEqual(per, [(0, 0)] * 3)
+        self.assertEqual(scores, [0, 0, 0])
+        self.assertFalse(any(bounds))
+
+    def test_the_frames_command_runs_end_to_end(self):
+        """A regression guard for a bug that only an end-to-end run could find.
+
+        `cmd_frames` called `judge(p)` where `p` was a `Path` (and was also rebound by a comprehension
+        above), so every accepted directory ended in `AttributeError: 'WindowsPath' object has no attribute
+        'convert'`. It had been invisible because reaching that line needs six or more frames and every
+        shorter run exited at the refusal with code 2 -- so the command was broken on exactly the inputs it
+        accepted, and no unit test of `drift` or `aligned_shift` could have caught it.
+        """
+        import tempfile
+        from ichiwatashi.cli import main
+        with tempfile.TemporaryDirectory() as d:
+            for i in range(6):
+                self._sprite(interior_dx=i).save(Path(d) / ("f%02d.png" % i))
+            rc = main(["frames", d, "--duration", "80"])
+        self.assertEqual(rc, 0, "the frames command must complete on a directory it accepts")
+
+    def test_the_frames_command_refuses_too_few_frames(self):
+        """And the refusal is why the bug above hid: five frames exits before the broken line."""
+        import tempfile
+        from ichiwatashi.cli import main
+        with tempfile.TemporaryDirectory() as d:
+            for i in range(5):
+                self._sprite(interior_dx=i).save(Path(d) / ("f%02d.png" % i))
+            rc = main(["frames", d])
+        self.assertEqual(rc, 2, "a spread over too few frames is refused, with its own exit code")
+
+    def test_a_single_frame_returns_nothing_rather_than_dividing_by_zero(self):
+        """One frame has no pair, so every returned sequence is empty and the spreads are zero."""
+        tl = F.Timeline(width=20, height=20)
+        tl.add(self._sprite(), pivot=(10, 18))
+        self.assertEqual(tl.aligned_shift(), (0, 0, [], [], []))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -291,12 +291,36 @@ def cmd_frames(a):
     print("%d frame(s)  canvas %dx%d  anchor %s" % (len(ims), tl.width, tl.height, tl.anchor))
     print("  total %d ms" % tl.total_ms())
     print("  content drift relative to the anchor: %d x %d pixel(s)" % d)
+    # **The second measure, printed beside the first because neither subsumes the other.** `drift` reads the
+    # silhouette's edge; this reads how far each frame must move to sit on the previous one, which is what
+    # catches a shape moving *inside* a fixed outline. The spread is the refusal: a genuine translation gives
+    # one offset per pair, so a non-zero spread means the motion is not a translation and the offsets should
+    # not be read as distances.
+    adx, ady, per, scores, bounds = tl.aligned_shift()
+    if per:
+        print("  aligned shift between frames: %s" % ", ".join("%+d,%+d" % p for p in per))
+        print("    spread %d x %d  (0 means one steady offset; non-zero means the motion is not a "
+              "translation)" % (adx, ady))
+        if any(bounds):
+            n = sum(1 for b in bounds if b)
+            print("    NOTE: %d of %d fits landed on the search window's edge, so those are reported as "
+                  "0,0 -- the window was too small rather than the shift being zero" % (n, len(bounds)))
+        if any(scores):
+            print("    residual disagreement at the best offset: %s" % scores)
     if a.out:
         tl.to_apng(a.out, scale=a.scale)
         print("wrote %s" % a.out)
-    for p in ims[:1]:
-        r = judge(p)
-        print(_fmt_report(r, Path(p).name))
+    # **`p` was rebound by the comprehension above, and that shadowing hid a second bug.** `ims` holds
+    # `Path` objects; the loop variable `p` is reused for the aligned-shift offsets before this line runs.
+    # Even unshadowed it would be wrong, because `judge` takes an image -- `cmd_judge` passes a *path*
+    # because it reads the file itself, and `judge` opens whatever it is given. So the image that was
+    # already opened is passed explicitly and the filename comes from the path.
+    #
+    # **This was invisible until now because reaching this line needs six or more frames**, and every
+    # shorter run exited at the refusal above with code 2 -- so the frames command has been broken on any
+    # directory it accepted.
+    r = judge(first)
+    print(_fmt_report(r, ims[0].name))
     return 0
 
 

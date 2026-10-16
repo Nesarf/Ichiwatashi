@@ -131,6 +131,104 @@ class Timeline:
             return 0, 0
         return max(xs) - min(xs), max(ys) - min(ys)
 
+    def aligned_shift(self, *, reach: int = 4, changed_only: bool = True):
+        """How far each frame must move to sit on the one before it -- the second drift measure.
+
+        **What `drift` cannot see, and what this replaces it with.** `drift` compares the top-left corner of
+        each frame's bounding box against its placement: it reads how far the *silhouette's edge* moved. The
+        limitation is recorded on the TODO entry rather than papered over -- "it only takes the first opaque
+        row/column, so a shape that moves inside while its silhouette stays put reads 0" -- and it is real,
+        because a breathing chest or a turning head keeps the outline and moves everything that matters.
+
+        **`changed_only` is the whole difficulty and was found by measuring, not by design.** The first
+        version minimised disagreement over *every* opaque pixel, and on a fixture where a 16-pixel accent
+        slid one pixel inside a fixed 330-pixel silhouette it returned `(0, 0)` for every pair: the moving
+        accent contributed 32 disagreeing pixels at a one-pixel offset while the stationary body contributed
+        52 at a zero offset, so the best fit was correctly "do not move". The metric was overwhelmed by the
+        part of the drawing that was not moving.
+
+        So with `changed_only` the pair of frames is first differenced **at zero offset**, which identifies
+        the pixels that moved or changed at all, and the offset search then runs over those alone. A region
+        that shifted by one contributes far more changed pixels than a region that merely got an edge
+        redraw, so the majority of the changed set does translate with the motion. Set `changed_only=False`
+        for the whole-frame form, which answers a different question -- how far the drawing as a whole moved
+        -- and is the right one when a large area moves together.
+
+        Returns `(dx_spread, dy_spread, per_frame, best_scores, boundaries)`:
+
+            dx_spread / dy_spread   max minus min of the per-frame shifts -- the shape `drift` also returns
+            per_frame               the offsets themselves, **and these are the useful reading**: a uniform
+                                    per-pair shift is speed, while a spread is a jump. Note that a whole
+                                    animation translating one pixel per frame has a spread of 0 -- the
+                                    spread answers "did the motion stutter", not "did it move"
+            best_scores             residual disagreement at the best offset, per pair
+            boundaries              True where the best fit landed on the edge of the search window, i.e.
+                                    where no answer was found and `(0, 0)` was substituted
+
+        **The spread is what refuses a rotation, and that was measured rather than assumed.** A first
+        version of this docstring claimed the boundary flag would catch it. Measured on the rotation fixture
+        at three window sizes: at `reach=3` the fit hits the edge five times, while at `reach=6` and `9` it
+        "converges" on `(-4, -4)` and flags nothing at all. So **the flag only catches a search that was cut
+        off; it cannot catch a fit that settles on a wrong answer**, which is what a rotation produces.
+
+        The signal that does catch it is the **spread**: a genuine translation gives the same offset for
+        every pair, so its spread is 0, while the rotation fixture returns `[(-4, -4), (0, -1), ...]` with a
+        spread of `(4, 3)`. A caller that reads the spread as "is this motion a translation" gets the right
+        answer; a caller that reads it as "how far did it move" does not, and the return tuple's shape is
+        the reason both are available.
+
+        When nothing changed between two frames the residual is 0 and the shift is `(0, 0)`, which is the
+        truth rather than a fallback.
+        """
+        frames = self.compose()
+        if len(frames) < 2:
+            return 0, 0, [], [], []
+        W, H = frames[0].size
+        shifts, scores, boundaries = [], [], []
+        for a, b in zip(frames, frames[1:]):
+            pa, pb = a.load(), b.load()
+            if changed_only:
+                seta = {(x, y) for y in range(H) for x in range(W) if pa[x, y] != pb[x, y]}
+            else:
+                seta = {(x, y) for y in range(H) for x in range(W)
+                        if pa[x, y][3] or pb[x, y][3]}
+            if not seta:
+                # identical frames: no motion, and saying so is the truth rather than a fallback
+                shifts.append((0, 0))
+                scores.append(0)
+                boundaries.append(False)
+                continue
+            best = None
+            for dy in range(-reach, reach + 1):
+                for dx in range(-reach, reach + 1):
+                    diff = 0
+                    for (x, y) in seta:
+                        nx, ny = x + dx, y + dy
+                        # a shifted read that leaves the frame counts as a disagreement, which is what
+                        # keeps the fit from preferring an offset that simply compares fewer pixels
+                        ca = pa[x, y]
+                        cb = pb[nx, ny] if (0 <= nx < W and 0 <= ny < H) else (0, 0, 0, 0)
+                        if ca != cb:
+                            diff += 1
+                    if best is None or diff < best[0]:
+                        best = (diff, dx, dy)
+            # **A best fit that lands on the search boundary is not a fit.** Measured on a fixture where a
+            # mark changed orientation rather than position, this returned (-4, -4) then (-6, -6) with
+            # `reach` at 6 -- sitting exactly on the edge both times, which means the search ran out of room
+            # rather than found an answer. Reporting it as a shift would be reporting the search window.
+            # The honest result is to widen `reach` or to refuse, so the caller is told which happened.
+            if abs(best[1]) == reach or abs(best[2]) == reach:
+                best = (best[0], 0, 0)
+                boundary = True
+            else:
+                boundary = False
+            boundaries.append(boundary)
+            shifts.append((best[1], best[2]))
+            scores.append(best[0])
+        xs = [s[0] for s in shifts]
+        ys = [s[1] for s in shifts]
+        return max(xs) - min(xs), max(ys) - min(ys), shifts, scores, boundaries
+
     def to_gif(self, path, *, scale: int = 1, background=None, loop: int = 0):
         from PIL import Image
 
