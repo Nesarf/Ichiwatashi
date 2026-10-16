@@ -8,6 +8,7 @@ one property by destroying another. Each is pinned so it cannot come back.
 from __future__ import annotations
 
 import glob
+import json
 import math
 import os
 import unittest
@@ -2014,6 +2015,116 @@ class TestHistory(unittest.TestCase):
         # the wide first attempt must be gone and only the narrow retry present
         self.assertEqual(c.get(3, 5), ".", "the first rectangle was not undone")
         self.assertEqual(c.get(10, 5), "r", "the retry was not drawn")
+
+
+class TestGridRoundTrip(unittest.TestCase):
+    """Export a grid, read it back, and refuse what cannot be honoured.
+
+    The TODO entry: "网格 JSON 导出有了、导入没有（只能从形状脚本重建）。**手写补细节后无法回读**". So the
+    acceptance criterion is the one that entry names -- a hand edit made to the file must come back -- and
+    the assertions below are on pixels rather than on a successful parse.
+
+    **Building this found a real defect on the export side**, which is why the round trip is tested at all
+    rather than assumed: `to_grid` formatted every non-string colour as `"#%02X%02X%02X"`, which raises
+    `TypeError` on an RGBA tuple -- and every palette in this repository holds RGBA, because `judge` and
+    `figures` both work in it. Nothing had caught it because nothing called `to_grid` in a test.
+    """
+
+    PALETTE = {".": None, "k": (20, 20, 28, 255), "s": (226, 178, 196, 255), "h": (110, 80, 150, 128)}
+
+    def _canvas(self):
+        c = B.Canvas(12, 10, ".")
+        c.disc(5.5, 4.5, 4, "s")
+        c.rect(2, 7, 9, 9, "h")
+        c.outline("k")
+        return c
+
+    def test_a_grid_survives_a_json_round_trip_pixel_for_pixel(self):
+        """The whole point: what came out goes back in, and the picture is the same one."""
+        c = self._canvas()
+        grid = json.loads(json.dumps(c.to_grid(self.PALETTE)))
+        c2, pal2 = B.from_grid(grid)
+        self.assertEqual(c2.state(), c.state())
+        self.assertEqual((c2.width, c2.height), (c.width, c.height))
+        self.assertEqual(c2.bg, c.bg)
+        # and it renders identically, which covers the palette having been re-parsed rather than passed on
+        self.assertEqual(c.to_image(self.PALETTE).tobytes(), c2.to_image(pal2).tobytes())
+
+    def test_alpha_is_carried_rather_than_dropped(self):
+        """A 3-tuple is written as #RRGGBB and a 4-tuple as #RRGGBBAA, and both come back whole.
+
+        The defect above lived here: the exporter could not write an RGBA palette at all.
+        """
+        c = self._canvas()
+        grid = c.to_grid(self.PALETTE)
+        self.assertEqual(grid["palette"]["s"], "#E2B2C4FF")
+        self.assertEqual(grid["palette"]["h"], "#6E509680", "the alpha must survive, not be dropped")
+        self.assertEqual(grid["palette"]["."], "transparent")
+        _, pal = B.from_grid(grid)
+        self.assertEqual(pal["h"], (110, 80, 150, 128))
+        self.assertIsNone(pal["."])
+
+    def test_a_hand_edit_comes_back(self):
+        """The criterion the TODO entry states, done the way a person would do it: change one character."""
+        c = self._canvas()
+        grid = json.loads(json.dumps(c.to_grid(self.PALETTE)))
+        rows = list(grid["pixels"])
+        row = list(rows[8])
+        self.assertNotEqual(row[5], "s")
+        row[5] = "s"                       # a hand-added highlight
+        rows[8] = "".join(row)
+        grid["pixels"] = rows
+        c2, _ = B.from_grid(grid)
+        self.assertEqual(c2.get(5, 8), "s", "the hand edit was lost")
+        self.assertEqual(c2.state(), B.from_grid(grid)[0].state())
+
+    def test_every_malformed_grid_is_refused_by_name(self):
+        """Six refusals, each naming the thing that would otherwise be a wrong picture.
+
+        The last one is the reason `from_grid` exists instead of being a call to `from_rows`: an unknown
+        character renders as nothing, so a typo in a hand-edited file would leave a hole and raise no error
+        anywhere.
+        """
+        cases = [
+            ({"height": 2, "pixels": ["ab", "ab"]}, "width"),
+            ({"width": 0, "height": 2, "pixels": ["ab", "ab"]}, "positive"),
+            ({"width": "2", "height": 2, "pixels": ["ab", "ab"]}, "positive"),
+            ({"width": 2, "height": 2, "pixels": [[1, 2], [3, 4]]}, "list of strings"),
+            ({"width": 2, "height": 3, "pixels": ["ab", "ab"]}, "row(s) for a height"),
+            ({"width": 3, "height": 2, "pixels": ["ab", "ab"]}, "row 0 is 2 wide"),
+            ({"width": 2, "height": 2, "pixels": ["aZ", "ab"],
+              "palette": {"a": "#000000", "b": "transparent"}}, "no palette entry"),
+            ({"width": 2, "height": 2, "pixels": ["ab", "ab"], "palette": {"a": "#00"}}, "RRGGBB"),
+        ]
+        for spec, wanted in cases:
+            with self.assertRaises(ValueError) as ctx:
+                B.from_grid(spec)
+            self.assertIn(wanted, str(ctx.exception),
+                          "the refusal for %r should mention %r, said: %s"
+                          % (spec, wanted, ctx.exception))
+
+    def test_the_background_is_not_an_unknown_character(self):
+        """A `.` absent from the palette is the canvas's own background, and it comes back in the palette
+        so the image can be rendered without the caller having to add it."""
+        grid = {"width": 2, "height": 2, "pixels": ["a.", ".a"], "palette": {"a": "#010203"}}
+        canvas, pal = B.from_grid(grid)
+        self.assertEqual(canvas.bg, ".")
+        self.assertIn(".", pal)
+        self.assertIsNone(pal["."])
+        self.assertEqual(canvas.get(0, 0), "a")
+        self.assertEqual(canvas.get(1, 0), ".")
+
+    def test_parse_colour_accepts_the_shapes_to_grid_writes(self):
+        """The inverse has to accept its own forward function's output, in every spelling it writes."""
+        self.assertEqual(B.parse_colour("#FF8000"), (255, 128, 0, 255))
+        self.assertEqual(B.parse_colour("#FF800080"), (255, 128, 0, 128))
+        self.assertIsNone(B.parse_colour("transparent"))
+        self.assertIsNone(B.parse_colour(None))
+        self.assertEqual(B.parse_colour((1, 2, 3)), (1, 2, 3, 255))
+        self.assertEqual(B.parse_colour("red"), "red")
+        for bad in ("#FFF", "#GGGGGG", (1, 2), (1, 2, 3, 4, 5), 3.5):
+            with self.assertRaises(ValueError):
+                B.parse_colour(bad)
 
 
 if __name__ == "__main__":

@@ -20,7 +20,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import dataclass
 
-__all__ = ["Canvas"]
+__all__ = ["Canvas", "from_rows", "from_grid", "parse_colour"]
 
 TRANSPARENT = None
 
@@ -328,13 +328,40 @@ class Canvas:
                 for y in range(self.height)]
 
     def to_grid(self, palette: dict) -> dict:
-        """The `{width, height, palette, pixels}` form, which is also the interchange format."""
+        """The `{width, height, palette, pixels}` form, which is also the interchange format.
+
+        **Alpha is carried, and the first version of this could not do it at all.** It formatted every
+        non-string, non-`TRANSPARENT` colour as `"#%02X%02X%02X"`, which raises `TypeError: not all
+        arguments converted during string formatting` the moment a palette holds an RGBA tuple -- and every
+        palette in this repository does, because `judge` and `figures` both work in RGBA. So the export
+        path was broken for the only kind of palette the rest of the tool produces, and nothing caught it
+        because nothing called `to_grid` in a test.
+
+        A 3-tuple is written as `#RRGGBB` because that is what a human editing the file expects to see; a
+        4-tuple keeps its alpha as `#RRGGBBAA`; `None` stays `transparent`; a string passes through.
+        `parse_colour` accepts all four back.
+        """
+        def _one(v):
+            if v is TRANSPARENT:
+                return "transparent"
+            if isinstance(v, str):
+                return v
+            try:
+                comps = tuple(int(c) for c in v)
+            except (TypeError, ValueError):
+                raise ValueError("a colour must be a string, None, or a tuple of 3 or 4 numbers, got %r"
+                                 % (v,)) from None
+            if len(comps) == 3:
+                return "#%02X%02X%02X" % comps
+            if len(comps) == 4:
+                return "#%02X%02X%02X%02X" % comps
+            raise ValueError("a colour must have 3 or 4 components, got %d" % len(comps))
+
         return {
             "width": self.width,
             "height": self.height,
-            "palette": {k: ("transparent" if v is TRANSPARENT else
-                            ("#%02X%02X%02X" % tuple(v) if not isinstance(v, str) else v))
-                        for k, v in palette.items()},
+            "bg": self.bg,
+            "palette": {k: _one(v) for k, v in palette.items()},
             "pixels": self.rows(),
         }
 
@@ -383,3 +410,100 @@ def from_rows(rows, bg: str = ".") -> Canvas:
     c = Canvas(w, len(rows), bg)
     c._cells = list("".join(rows))
     return c
+
+
+#: What a grid's colour fields may say besides a hex colour. `to_grid` writes more than one spelling, and
+#: an importer that accepted only one of them would turn its own output into a failure.
+TRANSPARENT_SPELLINGS = ("transparent", "none", "")
+
+
+def parse_colour(value):
+    """A grid's colour field back into something `to_image` accepts, or None for transparent.
+
+    Raises on anything unrecognised rather than passing it through: a palette entry that silently stayed a
+    string would reach PIL as a colour name and fail somewhere far from the file that was wrong. Named
+    because `to_grid` writes three different shapes -- `#RRGGBB`, `transparent`, and a pre-existing string.
+    """
+    if value is None:
+        return None
+    if isinstance(value, (tuple, list)):
+        if len(value) == 3:
+            return tuple(int(v) for v in value) + (255,)
+        if len(value) == 4:
+            return tuple(int(v) for v in value)
+        raise ValueError("a colour must have 3 or 4 components, got %d" % len(value))
+    if isinstance(value, str):
+        v = value.strip()
+        if v.lower() in TRANSPARENT_SPELLINGS:
+            return None
+        if v.startswith("#"):
+            h = v[1:]
+            if len(h) == 6:
+                return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16), 255)
+            if len(h) == 8:
+                return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16), int(h[6:8], 16))
+            raise ValueError("a # colour must be RRGGBB or RRGGBBAA, got %r" % value)
+        # a bare name stays a string, which is what `to_image` already accepts for a named colour
+        return v
+    raise ValueError("unrecognised colour %r" % (value,))
+
+
+def from_grid(spec) -> tuple:
+    """`to_grid`'s output back into `(Canvas, palette)`, refusing what it cannot honour.
+
+    **This is the half that was missing.** The TODO entry: "网格 JSON 导出有了、导入没有（只能从形状脚本
+    重建）。手写补细节后无法回读" -- a grid could be written out and edited by hand, and there was no way to
+    read it back, so hand work could not return to the tool.
+
+    The refusal list is the point rather than a formality. Each check names something that would otherwise
+    appear as a wrong picture far from the file that caused it:
+
+        a missing or non-positive width/height   a canvas of the wrong size, or a crash inside `Canvas`
+        pixels that is not a list of strings      `from_rows` would take a character-indexed guess
+        a row count disagreeing with height       the grid is longer or shorter than it claims
+        a row width disagreeing with width        also refused by `from_rows`, restated with the row index
+        a character with no palette entry         **the silent one**: an unknown key renders as nothing,
+                                                  so a hand-typed typo would leave a hole and raise no error
+
+    The last check is why this exists at all instead of being a call to `from_rows`. `to_grid` writes a
+    palette so the image can be re-rendered; `from_grid` reads it so the *pixels* can be checked, and that
+    check is only possible because the palette is there.
+
+    Returns the palette with colours parsed, and with the background added when the grid did not carry it:
+    a `.` absent from the palette is the canvas's own background, not an unknown character.
+    """
+    if not isinstance(spec, dict):
+        raise ValueError("a grid must be an object, got %s" % type(spec).__name__)
+    for field in ("width", "height", "pixels"):
+        if field not in spec:
+            raise ValueError("grid: %r is required" % field)
+    w, h = spec["width"], spec["height"]
+    for name, v in (("width", w), ("height", h)):
+        if not isinstance(v, int) or isinstance(v, bool) or v <= 0:
+            raise ValueError("grid: %s must be a positive integer, got %r" % (name, v))
+    rows = spec["pixels"]
+    if not isinstance(rows, list) or not all(isinstance(r, str) for r in rows):
+        raise ValueError("grid: 'pixels' must be a list of strings")
+    if len(rows) != h:
+        raise ValueError("grid: %d row(s) for a height of %d" % (len(rows), h))
+    for i, r in enumerate(rows):
+        if len(r) != w:
+            raise ValueError("grid: row %d is %d wide, width is %d" % (i, len(r), w))
+
+    raw_palette = spec.get("palette") or {}
+    if not isinstance(raw_palette, dict):
+        raise ValueError("grid: 'palette' must be an object")
+    palette = {k: parse_colour(v) for k, v in raw_palette.items()}
+    bg = spec.get("bg", ".")
+    if not isinstance(bg, str) or len(bg) != 1:
+        raise ValueError("grid: 'bg' must be a single character, got %r" % (bg,))
+    known = set(palette) | {bg}
+    unknown = sorted(set("".join(rows)) - known)
+    if unknown:
+        raise ValueError("grid: %d character(s) have no palette entry: %s (known: %s)"
+                         % (len(unknown), ", ".join(repr(c) for c in unknown),
+                            ", ".join(repr(c) for c in sorted(known))))
+    canvas = from_rows(rows, bg)
+    if bg not in palette:
+        palette[bg] = None
+    return canvas, palette

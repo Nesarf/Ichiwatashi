@@ -124,6 +124,29 @@ Two layout decisions were forced by reading the pixels back rather than by looki
   reference band with the shipped reference marked on it, which is the comparison `tools/calibrate.py`
   prints as text.
 
+## Grid round trip
+
+```bash
+ichiwatashi grid sprite.json --out sprite.grid.json     # a shape script's canvas, as editable JSON
+#   ... edit sprite.grid.json by hand ...
+ichiwatashi ungrid sprite.grid.json --out sprite.png --emit-script sprite.rebuilt.json
+```
+
+The form is `{width, height, bg, palette, pixels}`, where `pixels` is one string per row. Colors are
+written `#RRGGBB`, or `#RRGGBBAA` when the palette carries alpha, or `transparent`.
+
+**Reading a grid back validates it, and the validation is the reason `from_grid` exists** rather than
+being a call to `from_rows`. Each refusal names something that would otherwise be a wrong picture far
+from the file that caused it: a missing or non-positive size, rows that are not strings, a row count or
+row width that disagrees with the header, a colour that is neither hex nor a known spelling — and the
+quiet one, **a character with no palette entry**. An unknown key renders as nothing, so a typo in a
+hand-edited file would leave a hole and raise no error anywhere. That check is only possible because the
+grid carries its palette.
+
+A round trip is asserted to be pixel-identical and byte-identical after rendering, because the point of
+the feature is the TODO entry's own words: a grid could be written out and corrected by hand, and there
+was no way to read it back, so **hand work could not return to the tool**.
+
 ## History
 
 ```json

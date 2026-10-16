@@ -347,6 +347,76 @@ def cmd_figures(a):
     return 0
 
 
+def cmd_ungrid(a):
+    """Read a grid JSON back, render it, and offer it as a shape script again.
+
+    **This closes the loop the TODO entry named**: export a grid, edit it by hand, read it back. Two
+    outputs, because the two are useful for different things -- the PNG is the picture the hand edits
+    produced, and the `--emit-script` output is the same grid as a shape script the parametric path can
+    keep working from. Without this a hand-edited grid could only be looked at, never built on.
+    """
+    from . import builder as B
+
+    spec = json.loads(Path(a.grid).read_text(encoding="utf-8"))
+    try:
+        canvas, palette = B.from_grid(spec)
+    except ValueError as e:
+        # named rather than traced: the refusal already says which row or which character, and a
+        # traceback from inside `from_rows` would bury that under three frames of this function
+        raise SystemExit("REFUSED: %s" % e)
+    print("%s  %dx%d  %d key(s): %s"
+          % (Path(a.grid).name, canvas.width, canvas.height, len(palette),
+             ", ".join(sorted(repr(k) for k in palette))))
+    if a.out:
+        out = Path(a.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        canvas.to_image(palette).save(out)
+        print("wrote %s" % out)
+    if a.preview:
+        canvas.preview(scale=a.scale, palette=palette).convert("RGB").save(a.preview)
+        print("wrote %s (x%d)" % (a.preview, a.scale))
+    if a.emit_script:
+        rows = canvas.rows()
+        script = {"width": canvas.width, "height": canvas.height,
+                  "bg": canvas.bg, "palette": spec.get("palette") or {}, "pixels": rows,
+                  "note": "emitted by `ichiwatashi ungrid --emit-script`; the pixels are literal, so "
+                          "this is a grid the build path can carry rather than a shape description"}
+        Path(a.emit_script).write_text(json.dumps(script, indent=2), encoding="utf-8")
+        print("wrote %s" % a.emit_script)
+    return 0
+
+
+def cmd_grid(a):
+    """Write a canvas out as `{width, height, bg, palette, pixels}` for hand editing.
+
+    The other half of `ungrid`. Until both halves existed a grid could only be produced, never read, so a
+    file that had been corrected by hand could not come back.
+    """
+    from . import builder as B
+
+    spec = json.loads(Path(a.script).read_text(encoding="utf-8"))
+    canvas = B.Canvas(spec["width"], spec["height"], spec.get("bg", "."))
+    for kind, step in plan_steps(spec):
+        if kind in HISTORY_OPS:
+            for _ in range(step["count"]):
+                getattr(canvas, kind)()
+            continue
+        if kind == "outline":
+            canvas.outline(step["key"], diagonal=step.get("diagonal", False))
+            continue
+        args = [step[k] for k in SHAPE_ARGS[kind]]
+        if kind in ("trap", "cone") and "cx" in step:
+            args.append(step["cx"])
+        args.append(step["key"])
+        getattr(canvas, kind)(*args)
+    grid = canvas.to_grid(spec.get("palette") or {})
+    out = Path(a.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(grid, indent=2), encoding="utf-8")
+    print("wrote %s  %dx%d  %d key(s)" % (out, canvas.width, canvas.height, len(grid["palette"])))
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="ichiwatashi", description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -382,6 +452,19 @@ def main(argv=None):
     b.add_argument("--out", required=True)
     b.add_argument("--preview", help="also write a nearest-neighbour x8 image here")
     b.set_defaults(func=cmd_build)
+
+    g = sub.add_parser("grid", help="write a shape script's canvas as an editable grid JSON")
+    g.add_argument("script")
+    g.add_argument("--out", required=True, help="where to write the {width, height, bg, palette, pixels}")
+    g.set_defaults(func=cmd_grid)
+
+    ug = sub.add_parser("ungrid", help="read a grid JSON back, render it, and re-emit it")
+    ug.add_argument("grid")
+    ug.add_argument("--out", help="write the rendered PNG here")
+    ug.add_argument("--preview", help="also write a nearest-neighbour enlargement here")
+    ug.add_argument("--scale", type=int, default=8)
+    ug.add_argument("--emit-script", help="write the grid back out as a script the build path accepts")
+    ug.set_defaults(func=cmd_ungrid)
 
     ft = sub.add_parser("font", help="emit the shared 5x7 bitmap font for another tool to embed")
     ft.add_argument("--source", default=str(Path(__file__).resolve().parents[1] / "assets" / "font5x7.txt"),
