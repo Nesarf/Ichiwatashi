@@ -310,6 +310,17 @@ def cmd_frames(a):
     if a.out:
         tl.to_apng(a.out, scale=a.scale)
         print("wrote %s" % a.out)
+    if a.gif:
+        # **A GIF is offered and its losses are refused rather than silently taken.** GIF has no alpha and a
+        # 256-colour table; `to_gif` raises `GifWouldLose` naming what would change, and `--allow-loss` is
+        # the caller saying "I know". Exit code 2 for the same reason the frames-count refusal uses it:
+        # "I will not produce this" is a different answer from "I produced it and it has notes".
+        try:
+            tl.to_gif(a.gif, scale=a.scale, allow_loss=a.allow_loss)
+            print("wrote %s" % a.gif)
+        except F.GifWouldLose as e:
+            print("REFUSED: %s" % e)
+            return 2
     # **`p` was rebound by the comprehension above, and that shadowing hid a second bug.** `ims` holds
     # `Path` objects; the loop variable `p` is reused for the aligned-shift offsets before this line runs.
     # Even unshadowed it would be wrong, because `judge` takes an image -- `cmd_judge` passes a *path*
@@ -319,7 +330,18 @@ def cmd_frames(a):
     # **This was invisible until now because reaching this line needs six or more frames**, and every
     # shorter run exited at the refusal above with code 2 -- so the frames command has been broken on any
     # directory it accepted.
-    r = judge(first)
+    # **And the judge can refuse the input, which this command has to survive.** Measured on six 16x16
+    # frames: `judge` will not measure them -- short side 16, below what its metrics apply to -- and the
+    # exception came out of `cmd_frames` as a traceback, while `ichiwatashi judge` on the same file prints
+    # `REFUSED` with the explanation and exits 1. A command that dies where its sibling refuses makes the
+    # caller read a refusal out of a stack trace.
+    try:
+        r = judge(first)
+    except OutOfScopeError as exc:
+        print("REFUSED: %s" % ims[0].name)
+        for line in str(exc).strip().split("\n"):
+            print("  %s" % line)
+        return 1
     print(_fmt_report(r, ims[0].name))
     return 0
 
@@ -544,7 +566,11 @@ def main(argv=None):
 
     f = sub.add_parser("frames", help="assemble frames and report drift")
     f.add_argument("directory")
-    f.add_argument("--out", help="write an APNG here")
+    f.add_argument("--out", help="write an APNG here (real alpha, no colour limit)")
+    f.add_argument("--gif", help="write an animated GIF here; refused when the frames cannot be "
+                                 "represented without loss, unless --allow-loss is given")
+    f.add_argument("--allow-loss", action="store_true",
+                   help="write the GIF even though it will not be what was drawn")
     f.add_argument("--width", type=int)
     f.add_argument("--height", type=int)
     f.add_argument("--duration", type=int, default=100)

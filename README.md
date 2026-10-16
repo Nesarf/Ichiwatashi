@@ -148,6 +148,30 @@ fixture where a 16-pixel accent slides inside a fixed 330-pixel silhouette, the 
 returns `(0, 0)` for every pair. The default differences the pair first and fits only the pixels that
 changed, which is why it finds the motion.
 
+## GIF, and what it cannot hold
+
+`Timeline.to_gif()` **refuses by default** when the frames cannot be represented without loss, and
+`gif_losses()` reports the same numbers before any file exists. GIF has no alpha channel and a 256-colour
+table, so:
+
+- **partly** transparent pixels become either fully opaque or fully clear;
+- more than 256 distinct colours are quantised.
+
+```
+REFUSED: out.gif would not be what was drawn:
+  192 pixel(s) are partly transparent, which GIF cannot represent: they become either fully opaque or fully clear
+Use to_apng for real alpha and no colour limit, or pass allow_loss=True to write it anyway.
+```
+
+`--allow-loss` (or `allow_loss=True`) is the caller saying "I know" — the same shape as `judge(anyway=True)`
+and the frames-count refusal. The refusal **leaves no file behind**, because a file that opens and is not
+what was drawn is worse than no file: the reader has nothing to go on.
+
+One thing that is *not* a loss, and the first version of this check got it wrong: a frame using both fully
+opaque and fully transparent pixels. That is what every ordinary sprite frame looks like — drawn pixels on a
+transparent ground — and it is exactly what GIF's single transparent index represents correctly. Only a
+*partly* transparent pixel is unrepresentable.
+
 ## Grid round trip
 
 ```bash

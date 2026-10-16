@@ -31,7 +31,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-__all__ = ["Frame", "Timeline"]
+__all__ = ["Frame", "Timeline", "GifWouldLose"]
+
+
+class GifWouldLose(Exception):
+    """Raised when a GIF would not be what was drawn, unless the caller said `allow_loss=True`.
+
+    A named exception rather than a warning, because the alternative -- writing the file and mentioning it --
+    leaves the lossy file on disk for whoever reads it next. The tool's other refusals take the same shape:
+    `scope.OutOfScopeError` for something too small to measure, and the frames-count check that exits 2.
+    """
 
 
 @dataclass
@@ -229,7 +238,70 @@ class Timeline:
         ys = [s[1] for s in shifts]
         return max(xs) - min(xs), max(ys) - min(ys), shifts, scores, boundaries
 
-    def to_gif(self, path, *, scale: int = 1, background=None, loop: int = 0):
+    def gif_losses(self, *, scale: int = 1, background=None) -> dict:
+        """What writing these frames as a GIF would cost, measured before the file exists.
+
+        **GIF cannot hold alpha and cannot exceed 256 colours, and `to_gif` used to say nothing at all.**
+        The TODO entry called that out -- "GIF 会退化调色板（256 色上限 + 无 alpha）且不告警" -- and it is the
+        failure shape this project treats as the worst one: the file is produced, it opens, and it is not
+        what was drawn. A sprite on a transparent ground flattens onto whatever background was passed, and a
+        sprite with more than 256 colours is quantised.
+
+        Returned as a dict rather than a boolean so a refusal can quote numbers:
+
+            semi_transparent_pixels   pixels with alpha strictly between 0 and 255, summed over frames
+            distinct_colours          distinct RGBA values across the frames, which is what the 256 limit
+                                      applies to after compositing
+            over_limit                distinct_colours is above 256
+
+        **There was a third check here and it was a false positive on every sprite.** It flagged a frame that
+        used both a fully opaque and a fully transparent pixel -- which is what every ordinary sprite frame
+        does, drawn pixels plus a transparent ground, and it is exactly the case GIF's single transparent
+        index represents correctly. The first version therefore refused a four-frame, four-colour, fully
+        opaque animation, and the reason is worth keeping: "has both opaque and transparent pixels" is the
+        normal case, not the lost one. Only a *partly* transparent pixel is unrepresentable.
+        """
+        frames = self.compose(background=background)
+        if scale != 1:
+            frames = [f.resize((f.width * scale, f.height * scale), Image.NEAREST) for f in frames]
+        semi = 0
+        colours = set()
+        for f in frames:
+            data = list(f.get_flattened_data())
+            alphas = [p[3] for p in data]
+            semi += sum(1 for a in alphas if 0 < a < 255)
+            colours.update(data)
+        return {
+            "semi_transparent_pixels": semi,
+            "distinct_colours": len(colours),
+            "over_limit": len(colours) > 256,
+            "frames": len(frames),
+        }
+
+    def to_gif(self, path, *, scale: int = 1, background=None, loop: int = 0, allow_loss: bool = False):
+        """Write an animated GIF, refusing the losses GIF cannot avoid unless `allow_loss` says otherwise.
+
+        **The refusal is the point, and `to_apng` is why it can be offered.** GIF has no alpha channel and a
+        256-colour table, so a sprite on a transparent ground, or one with a wide palette, comes out
+        different from what was drawn -- silently, before this change. A file that opens and is not what was
+        rendered is worse than a refusal, because the reader has nothing to go on.
+
+        `allow_loss=True` writes it anyway and is the caller saying "I know" -- the same shape as
+        `judge(anyway=True)` and the frames-count refusal. `gif_losses` is always available, so a caller can
+        look before deciding.
+        """
+        losses = self.gif_losses(scale=scale, background=background)
+        problems = []
+        if losses["semi_transparent_pixels"]:
+            problems.append("%d pixel(s) are partly transparent, which GIF cannot represent: they become "
+                            "either fully opaque or fully clear" % losses["semi_transparent_pixels"])
+        if losses["over_limit"]:
+            problems.append("the frames use %d distinct colours where GIF allows 256, so the palette is "
+                            "quantised" % losses["distinct_colours"])
+        if problems and not allow_loss:
+            raise GifWouldLose(
+                "%s would not be what was drawn:\n  %s\nUse to_apng for real alpha and no colour limit, or "
+                "pass allow_loss=True to write it anyway." % (path, "\n  ".join(problems)))
         from PIL import Image
 
         frames = self.compose(background=background)

@@ -11,6 +11,7 @@ import glob
 import json
 import math
 import os
+import tempfile
 import unittest
 
 from pathlib import Path
@@ -2345,7 +2346,6 @@ class TestAlignedShift(unittest.TestCase):
         shorter run exited at the refusal with code 2 -- so the command was broken on exactly the inputs it
         accepted, and no unit test of `drift` or `aligned_shift` could have caught it.
         """
-        import tempfile
         from ichiwatashi.cli import main
         with tempfile.TemporaryDirectory() as d:
             for i in range(6):
@@ -2355,7 +2355,6 @@ class TestAlignedShift(unittest.TestCase):
 
     def test_the_frames_command_refuses_too_few_frames(self):
         """And the refusal is why the bug above hid: five frames exits before the broken line."""
-        import tempfile
         from ichiwatashi.cli import main
         with tempfile.TemporaryDirectory() as d:
             for i in range(5):
@@ -2368,6 +2367,97 @@ class TestAlignedShift(unittest.TestCase):
         tl = F.Timeline(width=20, height=20)
         tl.add(self._sprite(), pivot=(10, 18))
         self.assertEqual(tl.aligned_shift(), (0, 0, [], [], []))
+
+
+class TestGifLosses(unittest.TestCase):
+    """GIF's two unavoidable losses, measured before the file exists.
+
+    The TODO entry: "GIF 会退化调色板（256 色上限 + 无 alpha）且**不告警**". The silence was the bug, and the
+    failure shape is this project's worst one -- a file that opens and is not what was drawn.
+
+    **A third check was in the first version and it was a false positive on every sprite.** It flagged a
+    frame using both a fully opaque and a fully transparent pixel, which is what every ordinary sprite frame
+    does -- drawn pixels plus a transparent ground -- and which GIF's single transparent index represents
+    correctly. It refused a four-frame, four-colour, opaque animation. "Both opaque and transparent present"
+    is the normal case; only a *partly* transparent pixel is unrepresentable.
+    """
+
+    @staticmethod
+    def _timeline(colours, *, alpha=False, n=4, size=16):
+        tl = F.Timeline(width=size, height=size)
+        for i in range(n):
+            im = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+            px = im.load()
+            for y in range(size):
+                for x in range(size):
+                    c = tuple(colours[(x * size + y + i) % len(colours)])
+                    # built explicitly rather than by concatenation: `colours` may already hold 4-tuples,
+                    # and `c + (a,)` on a 4-tuple silently makes a 5-tuple
+                    px[x, y] = (c[0], c[1], c[2], 128 if alpha else 255)
+            tl.add(im, pivot=(size // 2, size - 1), duration_ms=100)
+        return tl
+
+    def test_an_ordinary_opaque_sprite_is_written_without_complaint(self):
+        """The case the false-positive check refused: three colours, no alpha, nothing lost."""
+        tl = self._timeline([(200, 60, 60), (60, 120, 200), (240, 220, 90)])
+        losses = tl.gif_losses()
+        self.assertEqual(losses["semi_transparent_pixels"], 0)
+        self.assertFalse(losses["over_limit"])
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "ok.gif"
+            tl.to_gif(p)
+            self.assertTrue(p.is_file() and p.stat().st_size > 0)
+
+    def test_a_transparent_ground_is_not_a_loss(self):
+        """Transparency itself is representable; only *partial* transparency is not."""
+        tl = self._timeline([(200, 60, 60)])
+        self.assertEqual(tl.gif_losses()["semi_transparent_pixels"], 0)
+        with tempfile.TemporaryDirectory() as d:
+            tl.to_gif(Path(d) / "ground.gif")
+
+    def test_a_partly_transparent_pixel_is_refused_with_a_count(self):
+        """The refusal quotes how many pixels are affected, so the reader can judge the damage."""
+        tl = self._timeline([(200, 60, 60)], alpha=True)
+        losses = tl.gif_losses()
+        self.assertGreater(losses["semi_transparent_pixels"], 0)
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "alpha.gif"
+            with self.assertRaises(F.GifWouldLose) as ctx:
+                tl.to_gif(p)
+            self.assertIn(str(losses["semi_transparent_pixels"]), str(ctx.exception))
+            self.assertIn("to_apng", str(ctx.exception), "the alternative must be named")
+            self.assertFalse(p.exists(), "a refusal must not leave a lossy file behind")
+            # and the caller saying "I know" writes it
+            tl.to_gif(p, allow_loss=True)
+            self.assertTrue(p.is_file())
+
+    def test_over_the_colour_limit_is_refused(self):
+        """More than 256 distinct colours is quantised, and that is said rather than done quietly."""
+        tl = self._timeline([(i, (i * 7) % 256, (i * 13) % 256) for i in range(300)])
+        losses = tl.gif_losses()
+        self.assertTrue(losses["over_limit"], "the fixture must actually exceed 256: %s" % losses)
+        self.assertGreater(losses["distinct_colours"], 256)
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaises(F.GifWouldLose) as ctx:
+                tl.to_gif(Path(d) / "many.gif")
+            self.assertIn("256", str(ctx.exception))
+
+    def test_the_cli_refuses_a_lossy_gif_with_its_own_exit_code(self):
+        """Exit 2 means "I will not produce this", distinct from 1 which means "produced, with notes"."""
+        from ichiwatashi.cli import main
+        with tempfile.TemporaryDirectory() as d:
+            # **48x48, not 16x16.** A 16-pixel short side is below the judge's gate, so the run would have
+            # been refused by the SIZE check before the GIF check ever ran -- and the test would have passed
+            # for the wrong reason. The fixture has to be something the judge will measure.
+            tl = self._timeline([(200, 60, 60)], alpha=True, n=6, size=48)
+            for i, im in enumerate(tl.compose()):
+                im.save(Path(d) / ("f%02d.png" % i))
+            rc = main(["frames", d, "--gif", str(Path(d) / "out.gif")])
+            self.assertEqual(rc, 2, "a lossy GIF must be refused with code 2")
+            self.assertFalse((Path(d) / "out.gif").exists())
+            rc2 = main(["frames", d, "--gif", str(Path(d) / "out.gif"), "--allow-loss"])
+            self.assertIn(rc2, (0, 1), "with --allow-loss it is written, and notes are a code 1")
+            self.assertTrue((Path(d) / "out.gif").is_file())
 
 
 if __name__ == "__main__":
