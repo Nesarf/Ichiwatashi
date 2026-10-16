@@ -357,15 +357,32 @@ def cmd_figures(a):
         for sid in counts:
             if sid not in ids:
                 ids.append(sid)
+        by_id = {x["source_id"]: x for x in sources}
+        # **The title says "manifest rows", and the first version said "CORPUS SOURCES".** That version was
+        # read -- correctly, by its own words -- as a picture of the whole corpus, in which two of three
+        # sources contributed nothing. The truth is that `manifest.jsonl` is the per-sample ledger of ONE
+        # generation: `th123-hisoutensoku-rip`'s 120 samples exist only as aggregate percentiles in
+        # `calibration.py`, and `ugoira-40frames`' 40 frames are deliberately out of the reference table. So
+        # the figure measures rows, the title says rows, and the note distinguishes "aggregate only" and
+        # "excluded" from anything genuinely missing.
         canvas, keys = FIG.source_distribution(
-            ids, counts, title="CORPUS SOURCES n=%d" % len(manifest))
+            ids, counts, title="MANIFEST ROWS n=%d" % len(manifest))
         p = out / "corpus-sources.png"
         FIG.render(canvas, keys, max(2, a.scale // 3)).convert("RGB").save(p)
         written.append(p)
-        empty = [i for i in ids if not counts.get(i)]
-        if empty:
-            print("  NOTE: %d declared source(s) contribute nothing: %s"
-                  % (len(empty), ", ".join(empty)))
+        for sid in ids:
+            if counts.get(sid):
+                continue
+            src = by_id.get(sid) or {}
+            ledger = src.get("ledger")
+            if ledger == "aggregate":
+                print("  %-24s no rows BY DESIGN: %s sample(s) exist as aggregate percentiles in "
+                      "calibration.py" % (sid, src.get("sample")))
+            elif ledger == "excluded":
+                print("  %-24s no rows BY DESIGN: %s sample(s) are deliberately out of the reference "
+                      "table" % (sid, src.get("sample")))
+            else:
+                print("  %-24s no rows and no ledger field: declared but unmeasured" % sid)
     for p in written:
         im = Image.open(p)
         print("wrote %s  %d x %d" % (p, im.width, im.height))

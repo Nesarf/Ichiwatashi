@@ -1834,6 +1834,39 @@ class TestFigures(unittest.TestCase):
         self.assertNotEqual(keys["b1"], keys["b0"],
                             "an empty source must not share a filled bar's colour")
 
+    def test_the_corpus_ledger_scope_is_machine_readable(self):
+        """Every declared source says what kind of ledger it has, so a zero row is not read as a gap.
+
+        **This is a correction to a misreading, and the misreading was mine.** The source figure's first
+        title said "CORPUS SOURCES" while it measured `manifest.jsonl` rows, so two sources showing nothing
+        read as a corpus with two holes in it. The truth: `th123-hisoutensoku-rip`'s 120 samples exist only
+        as aggregate percentiles in `calibration.py`, and `ugoira-40frames`' 40 frames are deliberately
+        excluded from the reference table. The `ledger` field is what lets a reader -- or a figure -- tell
+        "no rows by design" from "not measured yet".
+        """
+        import json as _json
+        rows = [_json.loads(l) for l in
+                (Path(__file__).resolve().parents[1] / "corpus" / "sources.jsonl")
+                .read_text(encoding="utf-8").splitlines() if l.strip()]
+        self.assertEqual(len(rows), 3, "three sources are declared")
+        kinds = {}
+        for r in rows:
+            self.assertIn("sample", r, "%s must declare its sample size" % r["source_id"])
+            self.assertIn("ledger", r, "%s must declare its ledger kind" % r["source_id"])
+            self.assertIn(r["ledger"], ("per-row", "aggregate", "excluded"),
+                          "%s has an unknown ledger kind %r" % (r["source_id"], r["ledger"]))
+            self.assertGreater(r["sample"], 0)
+            kinds[r["source_id"]] = r["ledger"]
+        # exactly one source carries the per-row ledger, and it is the one the manifest is made of
+        self.assertEqual(kinds["th155-aoCF-rip"], "per-row")
+        self.assertEqual(kinds["th123-hisoutensoku-rip"], "aggregate")
+        self.assertEqual(kinds["ugoira-40frames"], "excluded")
+        manifest = (Path(__file__).resolve().parents[1] / "corpus" / "manifest.jsonl") \
+            .read_text(encoding="utf-8").splitlines()
+        ids = {_json.loads(l)["source_id"] for l in manifest if l.strip()}
+        self.assertEqual(ids, {"th155-aoCF-rip"},
+                         "the ledger must hold rows for the per-row source and nothing else")
+
     def test_a_source_in_the_manifest_but_not_the_source_list_is_still_drawn(self):
         """A manifest row whose source id is undeclared is a corpus inconsistency, and hiding it would be
         the wrong way to be tidy."""

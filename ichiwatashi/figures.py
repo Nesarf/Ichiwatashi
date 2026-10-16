@@ -290,12 +290,17 @@ def source_distribution(sources, counts, *, width: int = 110, bar_h: int = 8, ga
                         title: str = None, glyphs=None):
     """Which corpus sources actually contribute, drawn from `sources.jsonl` and `manifest.jsonl`.
 
-    **A source that is declared but contributes nothing is drawn at zero, and that is this figure's main
-    job.** Measured when it was written, `corpus/sources.jsonl` names three sources while
-    `corpus/manifest.jsonl` holds 160 rows all from one of them -- so two are declared and empty, and a
-    chart that quietly omitted them would report a corpus broader than it is. The TODO entry says the same
-    thing in prose ("第二个来源只有 n=40 ... 要声称「通用」需要更多来源"); a picture does it better because the
-    zeros are visible rather than inferred.
+    **This measures manifest rows, and the caller must say so in the title.** The first version of the CLI
+    figure was titled "CORPUS SOURCES", which was read -- correctly, by its own words -- as a picture of the
+    whole corpus in which two of three sources contributed nothing. Investigated on 2026-10-16 and the
+    conclusion was that the figure was right and its title was wrong: `corpus/manifest.jsonl` is the
+    per-sample ledger of **one generation**, while `th123-hisoutensoku-rip`'s 120 samples exist only as
+    aggregate percentiles in `calibration.py` and `ugoira-40frames`' 40 frames are deliberately out of the
+    reference table. So zeros here mean "no rows", which is only a gap when the source's `ledger` field in
+    `sources.jsonl` does not say why. The CLI prints that reason per source.
+
+    A source with no rows is still drawn rather than omitted, because "declared and not in this ledger" is
+    a fact a reader needs, and a chart that dropped it would be silently claiming the opposite.
 
     Labels are source ids, which are long; the bars carry the comparison, so the label width is whatever
     the longest id needs rather than being truncated into ambiguity.
