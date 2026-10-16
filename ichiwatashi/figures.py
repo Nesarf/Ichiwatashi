@@ -26,7 +26,7 @@ from . import builder as B
 from .font import FONT_H, FONT_W, load_source
 
 __all__ = ["draw_text", "text_width", "palette_board", "outline_study", "silhouette_map",
-           "distribution_bars", "FONT_PATH", "DEFAULT_PALETTE"]
+           "distribution_bars", "source_distribution", "render", "FONT_PATH", "DEFAULT_PALETTE"]
 
 FONT_PATH = "assets/font5x7.txt"
 
@@ -284,6 +284,48 @@ def distribution_bars(labels, values, *, width: int = 120, bar_h: int = 7, gap: 
             keys["m%d" % i] = DEFAULT_PALETTE["k"]
     keys.update(DEFAULT_PALETTE)
     return canvas, keys
+
+
+def source_distribution(sources, counts, *, width: int = 110, bar_h: int = 8, gap: int = 4,
+                        title: str = None, glyphs=None):
+    """Which corpus sources actually contribute, drawn from `sources.jsonl` and `manifest.jsonl`.
+
+    **A source that is declared but contributes nothing is drawn at zero, and that is this figure's main
+    job.** Measured when it was written, `corpus/sources.jsonl` names three sources while
+    `corpus/manifest.jsonl` holds 160 rows all from one of them -- so two are declared and empty, and a
+    chart that quietly omitted them would report a corpus broader than it is. The TODO entry says the same
+    thing in prose ("第二个来源只有 n=40 ... 要声称「通用」需要更多来源"); a picture does it better because the
+    zeros are visible rather than inferred.
+
+    Labels are source ids, which are long; the bars carry the comparison, so the label width is whatever
+    the longest id needs rather than being truncated into ambiguity.
+    """
+    g = glyphs if glyphs is not None else _glyphs()
+    ids = list(sources)
+    vals = [int(counts.get(s, 0)) for s in ids]
+    head = 0 if not title else FONT_H + 3
+    label_w = max([text_width(i) for i in ids] + [0]) + 3
+    w = label_w + width + 3
+    h = head + len(ids) * (bar_h + gap) + 2
+    c = B.Canvas(w, h, ".")
+    if title:
+        draw_text(c, 1, 1, title, "k", glyphs=g)
+    top = max(vals) if any(vals) else 1
+    keys = dict(DEFAULT_PALETTE)
+    for i, (sid, v) in enumerate(zip(ids, vals)):
+        y = head + 1 + i * (bar_h + gap)
+        draw_text(c, 1, y + 1, sid, "d", glyphs=g)
+        span = int(round(v / top * width))
+        k = "b%d" % i
+        # **An empty source still gets a visible marker.** A zero-length bar draws nothing, which is
+        # indistinguishable from a source left out of the figure by mistake. One dim pixel says "declared
+        # and empty", which is the finding rather than the absence of one.
+        keys[k] = DEFAULT_PALETTE["y"] if span > 0 else DEFAULT_PALETTE["d"]
+        if span > 0:
+            c.rect(label_w, y, label_w + span - 1, y + bar_h - 1, k)
+        else:
+            c.rect(label_w, y + bar_h // 2, label_w, y + bar_h // 2, k)
+    return c, keys
 
 
 def render(canvas, keys, scale: int):

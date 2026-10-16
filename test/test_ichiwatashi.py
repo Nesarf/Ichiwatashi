@@ -1797,6 +1797,54 @@ class TestFigures(unittest.TestCase):
         self.assertGreater(lit(img_spans, k2, 1), 100)
         self.assertGreater(lit(img_spans, k2, 2), 100)
 
+    def test_an_empty_source_is_drawn_as_empty_rather_than_omitted(self):
+        """The figure's main job: a declared source contributing nothing must be visible as a zero.
+
+        Measured when this was written, `corpus/sources.jsonl` names three sources while
+        `corpus/manifest.jsonl` holds 160 rows all from one -- so two are declared and empty. A chart that
+        omitted them would report a corpus broader than it is, and the whole point of the TODO entry is
+        that breadth cannot be claimed without it.
+        """
+        ids = ["a-full-source", "b-empty-source", "c-empty-source"]
+        counts = {"a-full-source": 160}
+        c, keys = FIG.source_distribution(ids, counts, title="SOURCES")
+        img = FIG.render(c, keys, 1)
+        # **Only the bar area is counted.** The label column shares its colour with the empty-source
+        # marker, so a whole-image count includes the ids' own text and reports hundreds of pixels for a
+        # one-pixel marker -- which is exactly what the first version of this test measured.
+        label_w = max(FIG.text_width(i) for i in ids) + 3
+
+        def count(colour, row=None):
+            ys = range(img.height) if row is None else [row]
+            return sum(1 for y in ys for x in range(label_w, img.width)
+                       if img.getpixel((x, y))[:3] == colour)
+
+        self.assertGreater(count(keys["b0"][:3]), 100, "the full source needs a real bar")
+        # **Counted per row, not across the figure.** Both empty sources carry the same marker colour, so a
+        # whole-figure count returns 2 and reads as a two-pixel marker -- which is what the first version of
+        # this assertion measured. The marker is one pixel on its own row's centre line, and that is the
+        # claim worth pinning.
+        bar_h, gap, head = 8, 4, FIG.FONT_H + 3
+        for i in (1, 2):
+            row = head + 1 + i * (bar_h + gap) + bar_h // 2
+            self.assertEqual(count(keys["b%d" % i][:3], row), 1,
+                             "an empty source must show exactly one marker pixel on its own row")
+            # and nothing else on that row
+            self.assertEqual(count(keys["b%d" % i][:3], row - 2), 0)
+        self.assertNotEqual(keys["b1"], keys["b0"],
+                            "an empty source must not share a filled bar's colour")
+
+    def test_a_source_in_the_manifest_but_not_the_source_list_is_still_drawn(self):
+        """A manifest row whose source id is undeclared is a corpus inconsistency, and hiding it would be
+        the wrong way to be tidy."""
+        # the function is fed ids, so the caller decides; this pins that an id with no declared entry
+        # still gets a row when it carries a count
+        ids = ["declared", "undeclared-but-present"]
+        counts = {"declared": 5, "undeclared-but-present": 11}
+        c, keys = FIG.source_distribution(ids, counts)
+        self.assertEqual(c.width > 0 and c.height > 0, True)
+        self.assertIn("b1", keys)
+
     def test_the_reference_marker_sits_where_the_reference_is(self):
         """The marker is the shipped distribution's position inside the row's own band, so a row below
         its marker is below the reference -- the comparison `calibrate.py` prints as text."""

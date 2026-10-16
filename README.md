@@ -103,8 +103,8 @@ degraded.
 ichiwatashi figures sprite.png --out figures/ --scale 6 --colours 16
 ```
 
-Four pixel-art figures — the sampled palette, the silhouette, the outline study, and this sprite's
-metrics against the shipped reference bands. **Every one is drawn with this repository's own tools**:
+Five pixel-art figures — the sampled palette, the silhouette, the outline study, this sprite's metrics
+against the shipped reference bands, and (with `--corpus DIR`) the corpus source distribution. **Every one is drawn with this repository's own tools**:
 `builder`'s shapes and `font`'s glyphs, never a plotting library. The family rule is that this project's
 assets are pixel art, and for a measuring tool that has a second edge — *if a figure cannot be drawn with
 the tool's own verbs, the tool has a gap, and importing a drawing library would hide it.*

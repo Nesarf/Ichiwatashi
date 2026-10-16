@@ -341,6 +341,31 @@ def cmd_figures(a):
     p = out / "distribution.png"
     FIG.render(canvas, keys, max(3, a.scale // 2)).convert("RGB").save(p)
     written.append(p)
+
+    # **The corpus source figure is drawn from the corpus records, not from the sprite**, so it is only
+    # produced when a corpus directory is named. It is the one figure whose subject is the corpus rather
+    # than a drawing, and it is the honest way to show that a declared source contributes nothing.
+    if a.corpus:
+        import collections
+        root = Path(a.corpus)
+        sources = [json.loads(l) for l in (root / "sources.jsonl").read_text(encoding="utf-8").splitlines()
+                   if l.strip()]
+        manifest = [json.loads(l) for l in (root / "manifest.jsonl").read_text(encoding="utf-8").splitlines()
+                    if l.strip()]
+        counts = collections.Counter(m.get("source_id") for m in manifest)
+        ids = [s["source_id"] for s in sources]
+        for sid in counts:
+            if sid not in ids:
+                ids.append(sid)
+        canvas, keys = FIG.source_distribution(
+            ids, counts, title="CORPUS SOURCES n=%d" % len(manifest))
+        p = out / "corpus-sources.png"
+        FIG.render(canvas, keys, max(2, a.scale // 3)).convert("RGB").save(p)
+        written.append(p)
+        empty = [i for i in ids if not counts.get(i)]
+        if empty:
+            print("  NOTE: %d declared source(s) contribute nothing: %s"
+                  % (len(empty), ", ".join(empty)))
     for p in written:
         im = Image.open(p)
         print("wrote %s  %d x %d" % (p, im.width, im.height))
@@ -495,6 +520,8 @@ def main(argv=None):
                     help="integer upscale; the figures are drawn at 1 pixel per pixel and enlarged with "
                          "NEAREST, so this cannot resample")
     fg.add_argument("--colours", type=int, default=16, help="how many palette swatches to draw")
+    fg.add_argument("--corpus", help="also draw the corpus source distribution from this corpus directory "
+                                     "(the one figure whose subject is the corpus rather than a drawing)")
     fg.set_defaults(func=cmd_figures)
 
     a = ap.parse_args(argv)
