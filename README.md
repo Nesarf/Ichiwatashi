@@ -177,6 +177,33 @@ fixture where a 16-pixel accent slides inside a fixed 330-pixel silhouette, the 
 returns `(0, 0)` for every pair. The default differences the pair first and fits only the pixels that
 changed, which is why it finds the motion.
 
+## Frame timing, read rather than invented
+
+`ichiwatashi frames DIR --delays FILE` takes per-frame durations from a file that already carries them, and
+`frames.read_delays()` does the reading.
+
+**Timing does not have to be designed by hand.** A per-frame delay table is a normal thing for a container to
+store — `うごイラ` is "frames plus a delay table", and GIF, APNG and WebP each store a duration per frame. So
+the question is which container to read, not where timing could possibly come from.
+
+Two sources:
+
+- **an image file that stores durations** (GIF / APNG / WebP)
+- **a plain text table**, one number per line — commas and whitespace both work
+
+Two limits, asserted rather than described:
+
+- **GIF keeps its delays in hundredths of a second**, so it can never report finer than 10 ms. Asking a GIF
+  for 33 ms gives back **30**. That is the format, not the reader.
+- **a table that does not fit the frame count is refused, not padded.** Three values against six frames has
+  no honest resolution: broadcast one value and the animation is wrong everywhere; fill a default and the
+  invented number is indistinguishable from a measured one afterwards.
+
+A single-frame image reports **no** duration rather than a guess. That case was a real bug in the first
+version — a still PNG skipped the image branch because "has more than one frame" was used as the test for
+"is an image", then fell through to the text reader and came back with five numbers parsed out of its binary
+header.
+
 ## GIF, and what it cannot hold
 
 `Timeline.to_gif()` **refuses by default** when the frames cannot be represented without loss, and

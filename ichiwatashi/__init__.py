@@ -16,11 +16,11 @@ discipline. **Both would have been trained into a model as ground truth.**
 """
 from .judge import Report, judge
 from .builder import Canvas, from_rows
-from .frames import Frame, Timeline, GifWouldLose, even_durations, with_hold
+from .frames import Frame, Timeline, GifWouldLose, even_durations, with_hold, read_delays
 from .palette import sample, saturate, separation, best_accents
 
 __version__ = "0.1.0"
 
-__all__ = ["Report", "judge", "Canvas", "from_rows", "Frame", "Timeline", "GifWouldLose",
+__all__ = ["Report", "judge", "Canvas", "from_rows", "Frame", "Timeline", "GifWouldLose", "read_delays",
            "even_durations", "with_hold", "sample", "saturate", "separation",
            "best_accents", "__version__"]

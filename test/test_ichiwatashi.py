@@ -977,6 +977,119 @@ class TestPackaging(unittest.TestCase):
             shutil.rmtree(d, ignore_errors=True)
 
 
+class TestFrameDurations(unittest.TestCase):
+    """Frame timing read from where it already lives, rather than invented.
+
+    The TODO entry said timing would have to wait for a runtime probe because TH105's `.pat` carries none.
+    That is true of that format and false as a general conclusion: **a per-frame delay table is a normal thing
+    for a container to store**, and `うごイラ` ships exactly that. So the question is which container to read.
+
+    **Two limits are asserted rather than described**, because both would otherwise be discovered as bugs:
+    GIF keeps durations in hundredths of a second, so it can never report finer than 10 ms; and a duration
+    table that does not match the frame count is refused instead of padded.
+    """
+
+    @staticmethod
+    def _frames(n=6, size=32):
+        out = []
+        for i in range(n):
+            im = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+            px = im.load()
+            for y in range(6, size - 6):
+                for x in range(6, size - 6):
+                    px[x, y] = (200, 60, 60, 255)
+            for y in range(12, 16):
+                for x in range(10 + i, 14 + i):
+                    px[x, y] = (90, 60, 150, 255)
+            out.append(im)
+        return out
+
+    def test_a_text_table_is_read_in_whichever_separator_was_used(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "t.txt"
+            p.write_text("80\n80\n120\n40\n", encoding="utf-8")
+            self.assertEqual(F.read_delays(p)[0], [80, 80, 120, 40])
+            p.write_text("80, 80, 120, 40\n", encoding="utf-8")
+            self.assertEqual(F.read_delays(p)[0], [80, 80, 120, 40])
+            p.write_text("80 80 120 40", encoding="utf-8")
+            self.assertEqual(F.read_delays(p)[0], [80, 80, 120, 40])
+
+    def test_a_gif_reports_the_durations_it_stores(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "a.gif"
+            fr = self._frames(4)
+            fr[0].save(p, save_all=True, append_images=fr[1:], duration=[80, 80, 120, 40], loop=0, disposal=2)
+            delays, note = F.read_delays(p)
+            self.assertEqual(delays, [80, 80, 120, 40])
+            self.assertIn("4 frame", note)
+
+    def test_a_gif_cannot_report_finer_than_ten_milliseconds(self):
+        """GIF stores delay in hundredths of a second. This is the format, and it is pinned."""
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "b.gif"
+            fr = self._frames(2)
+            fr[0].save(p, save_all=True, append_images=fr[1:], duration=[33, 33], loop=0, disposal=2)
+            self.assertEqual(F.read_delays(p)[0], [30, 30],
+                             "a GIF cannot hold 33 ms; if this changes, the format did")
+
+    def test_a_single_frame_image_reports_no_duration_rather_than_junk(self):
+        """**The bug the first version had**: a still PNG fell through to the text reader.
+
+        `n_frames > 1` was the test for "is this an image", so a single-frame PNG skipped the image branch,
+        was read as text, and came back with five numbers parsed out of its binary header -- a still image
+        reporting timing. "Is an image" and "stores durations" are separate questions.
+        """
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "one.png"
+            self._frames(1)[0].save(p)
+            delays, note = F.read_delays(p)
+            self.assertEqual(delays, [], "a still image has no durations: got %r" % (delays,))
+            self.assertIn("single frame", note)
+
+    def test_applying_a_table_that_does_not_fit_is_refused(self):
+        tl = F.Timeline(32, 32)
+        for im in self._frames(6):
+            tl.add(im, duration_ms=100)
+        with self.assertRaises(ValueError) as ctx:
+            tl.apply_delays([80, 80, 80])
+        self.assertIn("3 duration", str(ctx.exception))
+        self.assertIn("6 frame", str(ctx.exception))
+        self.assertEqual(tl.total_ms(), 600, "a refused table must not have changed anything")
+
+    def test_applying_a_table_sets_each_frame_and_converts_centiseconds(self):
+        tl = F.Timeline(32, 32)
+        for im in self._frames(4):
+            tl.add(im, duration_ms=100)
+        tl.apply_delays([8, 8, 12, 4], unit="cs")
+        self.assertEqual([f.duration_ms for f in tl.frames], [80, 80, 120, 40])
+        self.assertEqual(tl.total_ms(), 320)
+        with self.assertRaises(ValueError):
+            tl.apply_delays([1, 2, 3, 4], unit="furlongs")
+
+    def test_a_negative_duration_is_refused(self):
+        tl = F.Timeline(32, 32)
+        tl.add(self._frames(1)[0])
+        with self.assertRaises(ValueError) as ctx:
+            tl.apply_delays([-5])
+        self.assertIn("negative", str(ctx.exception))
+
+    def test_the_cli_reads_durations_and_refuses_a_mismatch_with_exit_two(self):
+        from ichiwatashi.cli import main
+        with tempfile.TemporaryDirectory() as d:
+            fr = self._frames(6)
+            for i, im in enumerate(fr):
+                im.save(Path(d) / ("f%02d.png" % i))
+            gif = Path(d) / "t.gif"
+            fr[0].save(gif, save_all=True, append_images=fr[1:],
+                       duration=[80, 80, 80, 200, 40, 40], loop=0, disposal=2)
+            rc = main(["frames", d, "--delays", str(gif)])
+            self.assertIn(rc, (0, 1), "reading a GIF's timing must not fail")
+            short = Path(d) / "short.txt"
+            short.write_text("80\n80\n80\n", encoding="utf-8")
+            self.assertEqual(main(["frames", d, "--delays", str(short)]), 2,
+                             "a table that does not fit is refused with exit 2, not a traceback")
+
+
 class TestBuilder(unittest.TestCase):
 
     def test_shapes_and_outline(self):

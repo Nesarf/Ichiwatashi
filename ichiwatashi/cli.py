@@ -297,6 +297,25 @@ def cmd_frames(a):
     tl = F.Timeline(a.width or first.width, a.height or first.height)
     for i, p in enumerate(ims):
         tl.add(Image.open(p), duration_ms=a.duration)
+    if a.delays:
+        # **Timing is read from wherever it already lives, because it does not have to be invented.** The
+        # TODO entry said it would need a runtime probe; `うごイラ` ships a per-frame delay table, and GIF,
+        # APNG and WebP store one per frame, so the honest question is which container to read. A table that
+        # does not fit the frame count raises rather than being padded -- see `Timeline.apply_delays`.
+        delays, note = F.read_delays(a.delays, unit=a.delays_unit)
+        if not delays:
+            print("REFUSED: %s" % (note or "no durations in %s" % a.delays))
+            return 2
+        # **A table that does not fit is refused, not raised.** Measured: three values against six frames
+        # came out as a traceback with exit 1, which is the same shape as the earlier `OutOfScopeError` --
+        # a caller should not have to read a refusal out of a stack trace. Exit 2 keeps the meaning this
+        # project gives it: "I will not produce this", distinct from 1, "produced, with notes".
+        try:
+            tl.apply_delays(delays, unit=a.delays_unit)
+        except ValueError as exc:
+            print("REFUSED: %s" % exc)
+            return 2
+        print("  durations: %s" % note)
     d = tl.drift()
     print("%d frame(s)  canvas %dx%d  anchor %s" % (len(ims), tl.width, tl.height, tl.anchor))
     print("  total %d ms" % tl.total_ms())
@@ -586,7 +605,13 @@ def main(argv=None):
                    help="write the GIF even though it will not be what was drawn")
     f.add_argument("--width", type=int)
     f.add_argument("--height", type=int)
-    f.add_argument("--duration", type=int, default=100)
+    f.add_argument("--duration", type=int, default=100,
+                   help="milliseconds per frame, when no table is given")
+    f.add_argument("--delays", metavar="FILE",
+                   help="read per-frame durations from here: a GIF/APNG/WebP that stores them, or a text "
+                        "table of one number per line. Takes precedence over --duration")
+    f.add_argument("--delays-unit", choices=("ms", "cs"), default="ms",
+                   help="unit of the table's values (default ms; GIF files always report in ms)")
     f.add_argument("--scale", type=int, default=1)
     f.add_argument("--anyway", action="store_true",
                    help="report a drift spread from fewer frames than the measurement needs, as an "

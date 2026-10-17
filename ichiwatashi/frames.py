@@ -29,7 +29,9 @@ is how the same survey showed 360 ms and 500 ms outliers sitting alone among 60-
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
+from pathlib import Path
 
 __all__ = ["Frame", "Timeline", "GifWouldLose"]
 
@@ -92,6 +94,27 @@ class Timeline:
 
     def add(self, image, *, pivot=None, duration_ms: int = 100):
         self.frames.append(Frame(image, pivot, duration_ms))
+        return self
+
+    def apply_delays(self, delays, *, unit: str = "ms"):
+        """Set each frame's duration from a list, and refuse a list that does not fit.
+
+        **The count is checked rather than padded.** A four-value table against six frames has no honest
+        resolution: broadcast one value and the animation is wrong everywhere, pad with a default and the
+        made-up number becomes indistinguishable from a measured one afterwards. So a mismatch raises with
+        both counts in the message.
+        """
+        delays = list(delays)
+        if len(delays) != len(self.frames):
+            raise ValueError("%d duration(s) for %d frame(s); a duration table has to match the frames"
+                             % (len(delays), len(self.frames)))
+        if unit not in ("ms", "cs"):
+            raise ValueError("unit must be 'ms' or 'cs', got %r" % (unit,))
+        for f, d in zip(self.frames, delays):
+            value = int(d)
+            if value < 0:
+                raise ValueError("a negative duration (%r) is not a duration" % (value,))
+            f.duration_ms = value if unit == "ms" else value * 10
         return self
 
     def total_ms(self):
@@ -322,6 +345,71 @@ class Timeline:
                        duration=[f.duration_ms for f in self.frames], loop=loop,
                        format="PNG", disposal=2)
         return path
+
+
+def read_delays(source, *, unit: str = "ms"):
+    """Per-frame durations from a file that already carries them, or from a plain text table.
+
+    **The TODO entry said timing would have to wait for a runtime probe, because TH105's `.pat` carries no
+    timing.** That is true of that format and false as a general conclusion: **frame timing exists
+    independently of pixels and is a normal thing for a container to store.** `うごイラ` ships "frames plus a
+    per-frame delay table", GIF and APNG store a duration per frame, and WebP does too. So the question is not
+    "where would timing come from" but "which containers can be read", and this reads them.
+
+    Three sources, and **what each can and cannot represent matters**:
+
+        an image file (GIF / APNG / WebP)   the durations the file itself stores. **GIF keeps them in
+                                            hundredths of a second**, so a GIF never reports finer than 10 ms
+                                            -- a 33 ms delay written to a GIF comes back as 30. That is the
+                                            format, not the reader, and it is why the returned values are
+                                            checked against `unit`.
+        a text table                        one number per line (also accepts commas and whitespace), for
+                                            the case where the timing was measured or designed elsewhere.
+
+    Returns `(delays, note)` where `delays` is a list of ints in `unit` ("ms" or "cs") and `note` is a short
+    string saying where they came from, or `None` if the source carried none. **An absent duration is reported
+    as absent rather than filled with a default**, because a made-up 100 ms is indistinguishable from a
+    measured one once it is in the Timeline.
+    """
+    if unit not in ("ms", "cs"):
+        raise ValueError("unit must be 'ms' or 'cs', got %r" % (unit,))
+    path = Path(source)
+
+    def to_unit(value_ms):
+        return value_ms if unit == "ms" else max(1, round(value_ms / 10))
+
+    if path.is_file():
+        try:
+            from PIL import Image
+
+            im = Image.open(path)
+            n = getattr(im, "n_frames", 1)
+            # **"is an image" and "stores durations" are two questions, and the first version conflated
+            # them.** A single-frame PNG failed the `n > 1` test, fell through to the text reader, and came
+            # back with five numbers parsed out of its binary header -- a still image reported as having
+            # timing. Opening it successfully means it is an image; from there, no duration is an answer of
+            # "none", not a reason to try reading it as text.
+            if n <= 1:
+                return [], "%s is a single frame and stores no duration" % path.name
+            delays = []
+            for i in range(n):
+                im.seek(i)
+                delays.append(int(im.info.get("duration") or 0))
+            if any(delays):
+                return [to_unit(d) for d in delays], "%d frame(s) from %s" % (n, path.name)
+            return [], "%s has %d frames but stores no duration" % (path.name, n)
+        except Exception:
+            pass  # not an image; fall through to the text reader
+
+    text = path.read_text(encoding="utf-8", errors="replace")
+    numbers = [int(float(tok)) for tok in re.findall(r"-?\d+(?:\.\d+)?", text)]
+    if not numbers:
+        return [], "%s contains no numbers" % path.name
+    if unit == "ms":
+        # **the text table is taken as already being in the requested unit** -- it is a table somebody wrote
+        # for this purpose, not a container's internal representation, so reinterpreting it would be wrong
+        return numbers, "%d value(s) from %s" % (len(numbers), path.name)
+    return numbers, "%d value(s) from %s (read as centiseconds)" % (len(numbers), path.name)
 
 
 def even_durations(total_ms: int, count: int):
