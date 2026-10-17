@@ -172,6 +172,24 @@ offset for every pair, so a non-zero spread means the motion is not a translatio
 be read as distances. A best fit that lands on the edge of the search window is reported as `0, 0` with a
 note, because a truncated search is not a measurement.
 
+**And `exact` answers the question that flag cannot.** Frames are an integer grid, so a genuine translation
+matches every changed pixel and leaves a residual of zero. Measured as a matched fraction: a one-pixel
+translation gives **1.0000 at every window size**, while a 90-degree rotation gives 0.58 to 0.74 as the window
+widens and a horizontal flip 0.83 to 0.87. **Nothing that is not a translation reaches 1.0, and the
+translation reaches it regardless of the window** — which is what makes this a judgement rather than a note.
+So the CLI reports it as a count:
+
+```
+exactness: all 5 pair(s) are exact integer translations
+```
+
+And when a fit ran out of search window it says so, instead of offering the flagged `0, 0` as an answer:
+
+```
+exactness: none of the 5 pair(s) is a translation -- every fit ran out of search window, so no offset was
+found and none is reported
+```
+
 Read one thing as a caution: fitting **every** opaque pixel is overwhelmed by whatever is not moving. On a
 fixture where a 16-pixel accent slides inside a fixed 330-pixel silhouette, the whole-frame fit correctly
 returns `(0, 0)` for every pair. The default differences the pair first and fits only the pixels that

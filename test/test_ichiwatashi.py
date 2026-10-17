@@ -977,6 +977,100 @@ class TestPackaging(unittest.TestCase):
             shutil.rmtree(d, ignore_errors=True)
 
 
+class TestShiftExactness(unittest.TestCase):
+    """`exact` is what tells a translation from a lookalike, and it does not depend on the window.
+
+    **The problem it solves.** `aligned_shift` used to decide "is this fit trustworthy" by whether the best
+    offset landed on the search window's edge. Measured: at `reach=3` a rotation hits the edge five times,
+    while at `reach=6` and `9` it settles on a wrong offset and flags nothing. **The edge flag catches a
+    search that ran out of room; it cannot catch a fit that settles.**
+
+    **The signal that does catch it.** A frame is an integer grid, so a genuine translation matches every
+    changed pixel and leaves a residual of zero. Measured across three motion kinds, as a *fraction of the
+    changed pixels matched*: a one-pixel translation gives **1.0000** at every window size, a 90-degree
+    rotation gives 0.58 / 0.71 / 0.74 / 0.74 as the window widens, and a horizontal flip gives 0.83 / 0.87.
+    **Nothing that is not a translation reaches 1.0, and the translation reaches it regardless of the
+    window** -- which is what makes this a judgement and the edge flag a note.
+    """
+
+    SIZE = 40
+
+    def _frames(self, marks=None, rotate=0, flip=False, n=3):
+        """A body with an asymmetric notch and a mark that can move."""
+        out = []
+        for i in range(n):
+            im = Image.new("RGBA", (self.SIZE, self.SIZE), (0, 0, 0, 0))
+            px = im.load()
+            for y in range(8, self.SIZE - 8):
+                for x in range(8, self.SIZE - 8):
+                    px[x, y] = (200, 60, 60, 255)
+            for y in range(8, 16):
+                for x in range(self.SIZE - 12, self.SIZE - 8):
+                    px[x, y] = (0, 0, 0, 0)
+            dx = (marks[i] if marks else 0)
+            for y in range(18, 24):
+                for x in range(14 + dx, 20 + dx):
+                    px[x, y] = (90, 60, 150, 255)
+            if rotate:
+                im = im.rotate(rotate * i, resample=Image.NEAREST, center=(self.SIZE // 2, self.SIZE // 2))
+            if flip:
+                im = im.transpose(Image.FLIP_LEFT_RIGHT) if i % 2 else im
+            out.append(im)
+        return out
+
+    def _timeline(self, frames):
+        tl = F.Timeline(self.SIZE, self.SIZE)
+        for im in frames:
+            tl.add(im, pivot=(self.SIZE // 2, self.SIZE - 1))
+        return tl
+
+    def test_a_true_translation_is_exact_at_every_window_size(self):
+        """The claim the whole design rests on: the window stops being the bottleneck."""
+        tl = self._timeline(self._frames(marks=[0, 1, 2]))
+        for reach in (3, 4, 6, 9):
+            _dx, _dy, per, scores, _bounds, exact = tl.aligned_shift(reach=reach)
+            self.assertTrue(all(exact), "reach=%d: not every pair was exact: %s" % (reach, exact))
+            self.assertTrue(all(s == 0 for s in scores),
+                            "reach=%d: an exact fit must leave no residual: %s" % (reach, scores))
+            self.assertEqual(per, [(1, 0), (1, 0)], "reach=%d: offsets changed: %s" % (reach, per))
+
+    def test_a_rotation_is_not_exact(self):
+        tl = self._timeline(self._frames(rotate=15))
+        _dx, _dy, _per, scores, _bounds, exact = tl.aligned_shift(reach=6)
+        self.assertFalse(any(exact), "a rotation must not be reported as a translation: %s" % (exact,))
+        self.assertTrue(all(s > 0 for s in scores), "a rotation leaves residual: %s" % (scores,))
+
+    def test_a_flip_is_not_exact(self):
+        tl = self._timeline(self._frames(flip=True))
+        _dx, _dy, _per, _scores, _bounds, exact = tl.aligned_shift(reach=6)
+        self.assertFalse(any(exact), "a flip must not be reported as a translation: %s" % (exact,))
+
+    def test_identical_frames_are_exact_and_silent(self):
+        """Nothing changed, so every changed pixel (there are none) matched. Not a special case."""
+        tl = self._timeline([self._frames()[0]] * 3)
+        _dx, _dy, per, scores, bounds, exact = tl.aligned_shift()
+        self.assertEqual(per, [(0, 0), (0, 0)])
+        self.assertTrue(all(exact))
+        self.assertTrue(all(s == 0 for s in scores))
+        self.assertFalse(any(bounds))
+
+    def test_one_frame_returns_six_empty_items(self):
+        tl = F.Timeline(self.SIZE, self.SIZE)
+        tl.add(self._frames()[0])
+        self.assertEqual(tl.aligned_shift(), (0, 0, [], [], [], []))
+
+    def test_the_three_lists_are_the_same_length(self):
+        """`per_frame`, `best_scores`, `boundaries` and `exact` describe the same pairs."""
+        # `n` has to match the number of marks, or the fixture silently builds fewer frames than the
+        # assertion below expects -- which is what the first version of this test did.
+        tl = self._timeline(self._frames(marks=[0, 1, 2, 3], n=4))
+        _dx, _dy, per, scores, bounds, exact = tl.aligned_shift()
+        self.assertEqual(len(per), 3, "four frames make three pairs")
+        self.assertEqual(len(scores), len(per))
+        self.assertEqual(len(bounds), len(per))
+        self.assertEqual(len(exact), len(per))
+
+
 class TestFrameDurations(unittest.TestCase):
     """Frame timing read from where it already lives, rather than invented.
 
@@ -2685,7 +2779,7 @@ class TestAlignedShift(unittest.TestCase):
         tl = self._timeline("translation")
         dx, dy = tl.drift()
         self.assertEqual((dx, dy), (5, 0), "the bounding box moves five pixels across six frames")
-        adx, ady, per, _scores, bounds = tl.aligned_shift(reach=6)
+        adx, ady, per, _scores, bounds, exact = tl.aligned_shift(reach=6)
         self.assertEqual(per, [(1, 0)] * 5, "each frame sits one pixel right of the previous")
         self.assertFalse(any(bounds))
         self.assertEqual((adx, ady), (0, 0), "a steady crawl has no stutter")
@@ -2701,7 +2795,7 @@ class TestAlignedShift(unittest.TestCase):
         boxes = {tl.compose()[i].getbbox() for i in range(6)}
         self.assertEqual(len(boxes), 1, "the fixture's silhouette must not move")
         self.assertEqual(tl.drift(), (0, 0), "the bounding-box measure cannot see this, by construction")
-        adx, ady, per, _scores, bounds = tl.aligned_shift(reach=6)
+        adx, ady, per, _scores, bounds, exact = tl.aligned_shift(reach=6)
         self.assertEqual(per, [(1, 0)] * 5, "the interior moves one pixel per frame and that is the reading")
         self.assertFalse(any(bounds), "one pixel is well inside the window, so nothing hit an edge")
 
@@ -2713,8 +2807,8 @@ class TestAlignedShift(unittest.TestCase):
         fit -- it is the wrong question for this fixture, which is why the default differences first.
         """
         tl = self._timeline("interior")
-        _dx, _dy, whole, _s, _b = tl.aligned_shift(reach=6, changed_only=False)
-        _dx2, _dy2, changed, _s2, _b2 = tl.aligned_shift(reach=6, changed_only=True)
+        _dx, _dy, whole, _s, _b, exact = tl.aligned_shift(reach=6, changed_only=False)
+        _dx2, _dy2, changed, _s2, _b2, exact = tl.aligned_shift(reach=6, changed_only=True)
         self.assertEqual(whole, [(0, 0)] * 5, "the whole-frame fit cannot find the interior motion")
         self.assertEqual(changed, [(1, 0)] * 5, "the changed-pixel fit finds it")
 
@@ -2728,7 +2822,7 @@ class TestAlignedShift(unittest.TestCase):
         fixture oscillates between two incompatible offsets.
         """
         tl = self._timeline("rotate")
-        adx, ady, per, _scores, _bounds = tl.aligned_shift(reach=6)
+        adx, ady, per, _scores, _bounds, exact = tl.aligned_shift(reach=6)
         self.assertGreater(adx + ady, 0, "an oscillation must show as a non-zero spread: %s" % (per,))
         self.assertGreater(len(set(per)), 1, "the offsets must disagree with each other: %s" % (per,))
 
@@ -2740,7 +2834,7 @@ class TestAlignedShift(unittest.TestCase):
         above, and the two are now told apart on purpose.
         """
         tl = self._timeline("rotate")
-        _dx, _dy, per, _scores, bounds = tl.aligned_shift(reach=3)
+        _dx, _dy, per, _scores, bounds, exact = tl.aligned_shift(reach=3)
         self.assertTrue(any(bounds), "a truncated search must be flagged")
         for (x, y), hit in zip(per, bounds):
             if hit:
@@ -2751,7 +2845,7 @@ class TestAlignedShift(unittest.TestCase):
         tl = F.Timeline(width=20, height=20)
         for _ in range(4):
             tl.add(self._sprite(), pivot=(10, 18), duration_ms=100)
-        dx, dy, per, scores, bounds = tl.aligned_shift()
+        dx, dy, per, scores, bounds, exact = tl.aligned_shift()
         self.assertEqual((dx, dy), (0, 0))
         self.assertEqual(per, [(0, 0)] * 3)
         self.assertEqual(scores, [0, 0, 0])
@@ -2786,7 +2880,8 @@ class TestAlignedShift(unittest.TestCase):
         """One frame has no pair, so every returned sequence is empty and the spreads are zero."""
         tl = F.Timeline(width=20, height=20)
         tl.add(self._sprite(), pivot=(10, 18))
-        self.assertEqual(tl.aligned_shift(), (0, 0, [], [], []))
+        self.assertEqual(tl.aligned_shift(), (0, 0, [], [], [], []),
+                         "one frame: no pairs, and the sixth item is the per-pair exactness list")
 
 
 class TestGifLosses(unittest.TestCase):

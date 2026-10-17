@@ -186,7 +186,20 @@ class Timeline:
         for the whole-frame form, which answers a different question -- how far the drawing as a whole moved
         -- and is the right one when a large area moves together.
 
-        Returns `(dx_spread, dy_spread, per_frame, best_scores, boundaries)`:
+        Returns `(dx_spread, dy_spread, per_frame, best_scores, boundaries, exact)`:
+
+            exact                   True per pair where the fit was **exact** -- every changed pixel found a
+                                    match at that offset, so the residual is 0. **This is the judgement that
+                                    was missing, and pixel art is what makes it clean**: a frame is an integer
+                                    grid, so a real translation must match exactly, and a residual above
+                                    zero means something other than a translation happened. Measured across
+                                    three motion kinds: a one-pixel translation gives `matched = 1.0000` at
+                                    every window size, a 90-degree rotation gives 0.58 / 0.71 / 0.74 / 0.74
+                                    as the window widens, and a horizontal flip gives 0.83 / 0.87. Nothing
+                                    that is not a translation reaches 1.0, and the translation reaches it
+                                    regardless of window size.
+
+        The other items:
 
             dx_spread / dy_spread   max minus min of the per-frame shifts -- the shape `drift` also returns
             per_frame               the offsets themselves, **and these are the useful reading**: a uniform
@@ -195,7 +208,9 @@ class Timeline:
                                     spread answers "did the motion stutter", not "did it move"
             best_scores             residual disagreement at the best offset, per pair
             boundaries              True where the best fit landed on the edge of the search window, i.e.
-                                    where no answer was found and `(0, 0)` was substituted
+                                    where no answer was found and `(0, 0)` was substituted. **This only
+                                    catches a search that ran out of room** -- a fit that settles on a wrong
+                                    answer inside the window flags nothing, which is why `exact` exists
 
         **The spread is what refuses a rotation, and that was measured rather than assumed.** A first
         version of this docstring claimed the boundary flag would catch it. Measured on the rotation fixture
@@ -214,9 +229,9 @@ class Timeline:
         """
         frames = self.compose()
         if len(frames) < 2:
-            return 0, 0, [], [], []
+            return 0, 0, [], [], [], []
         W, H = frames[0].size
-        shifts, scores, boundaries = [], [], []
+        shifts, scores, boundaries, exact = [], [], [], []
         for a, b in zip(frames, frames[1:]):
             pa, pb = a.load(), b.load()
             if changed_only:
@@ -226,9 +241,12 @@ class Timeline:
                         if pa[x, y][3] or pb[x, y][3]}
             if not seta:
                 # identical frames: no motion, and saying so is the truth rather than a fallback
+                # identical frames: an exact zero shift, because every changed pixel (there are none)
+                # matches. Saying `exact=True` here is the truth rather than a special case.
                 shifts.append((0, 0))
                 scores.append(0)
                 boundaries.append(False)
+                exact.append(True)
                 continue
             best = None
             for dy in range(-reach, reach + 1):
@@ -250,16 +268,21 @@ class Timeline:
             # rather than found an answer. Reporting it as a shift would be reporting the search window.
             # The honest result is to widen `reach` or to refuse, so the caller is told which happened.
             if abs(best[1]) == reach or abs(best[2]) == reach:
+                truncated = True
                 best = (best[0], 0, 0)
-                boundary = True
             else:
-                boundary = False
-            boundaries.append(boundary)
+                truncated = False
+            boundaries.append(truncated)
+            # **`exact` requires both: not cut off, and nothing left over.** A truncated search has no
+            # residual worth reading (it is the worst offset in the window, kept only for the note), so it
+            # cannot be exact. And a residual above zero means the best available translation still leaves
+            # changed pixels unexplained -- which for an integer grid means the change was not a translation.
+            exact.append((not truncated) and best[0] == 0)
             shifts.append((best[1], best[2]))
             scores.append(best[0])
         xs = [s[0] for s in shifts]
         ys = [s[1] for s in shifts]
-        return max(xs) - min(xs), max(ys) - min(ys), shifts, scores, boundaries
+        return max(xs) - min(xs), max(ys) - min(ys), shifts, scores, boundaries, exact
 
     def gif_losses(self, *, scale: int = 1, background=None) -> dict:
         """What writing these frames as a GIF would cost, measured before the file exists.

@@ -77,8 +77,8 @@ def main() -> int:
                       ("rotate", "a mark changes orientation, not position")):
         tl = build(kind)
         dx, dy = tl.drift()
-        adx, ady, per, scores, bounds = tl.aligned_shift(reach=6)
-        wdx, wdy, _wper, _ws, _wb = tl.aligned_shift(reach=6, changed_only=False)
+        adx, ady, per, scores, bounds, exact = tl.aligned_shift(reach=6)
+        wdx, wdy, _wper, _ws, _wb, exact = tl.aligned_shift(reach=6, changed_only=False)
         print("%-13s %-10s %-20s %-9s %-11s %s"
               % (kind, "(%d,%d)" % (dx, dy), str(per[:3]), "(%d,%d)" % (adx, ady),
                  "Y" if any(bounds) else "n", max(scores) if scores else "-"))

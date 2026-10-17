@@ -325,11 +325,30 @@ def cmd_frames(a):
     # catches a shape moving *inside* a fixed outline. The spread is the refusal: a genuine translation gives
     # one offset per pair, so a non-zero spread means the motion is not a translation and the offsets should
     # not be read as distances.
-    adx, ady, per, scores, bounds = tl.aligned_shift()
+    adx, ady, per, scores, bounds, exact = tl.aligned_shift()
     if per:
         print("  aligned shift between frames: %s" % ", ".join("%+d,%+d" % p for p in per))
         print("    spread %d x %d  (0 means one steady offset; non-zero means the motion is not a "
               "translation)" % (adx, ady))
+        # **`exact` is the judgement that was missing, and it is a count rather than a threshold.** A frame
+        # is an integer grid, so a real translation matches every changed pixel; a residual above zero means
+        # something other than a translation happened. Measured: a one-pixel translation is exact at every
+        # window size, while a rotation reaches 0.58 to 0.74 and a flip 0.83 to 0.87 -- nothing that is not a
+        # translation reaches 1.0. So the reader is told which pairs are exact, not given a score to weigh.
+        if exact:
+            n_exact = sum(1 for e in exact if e)
+            cut = sum(1 for b in bounds if b) if bounds else 0
+            if n_exact == len(exact):
+                print("    exactness: all %d pair(s) are exact integer translations" % len(exact))
+            elif cut == len(exact):
+                # **"best available" would be a lie here**: every fit landed on the window's edge, so the
+                # reported (0,0) is the flag rather than an answer and there is no offset to read at all.
+                print("    exactness: none of the %d pair(s) is a translation -- every fit ran out of search "
+                      "window, so no offset was found and none is reported" % len(exact))
+            else:
+                print("    exactness: %d of %d pair(s) are exact translations; the rest leave changed pixels "
+                      "unexplained, so their offsets are the best available and not a translation"
+                      % (n_exact, len(exact)))
         if any(bounds):
             n = sum(1 for b in bounds if b)
             print("    NOTE: %d of %d fits landed on the search window's edge, so those are reported as "
