@@ -35,13 +35,39 @@ jobs:
       - run: python -m pip install "Pillow>=9"
       - name: The CLI runs and reports
         run: |
+          # **Both sides are tested, and the refusal is the more valuable one.** This job used to run
+          # `judge sample.png` on a 16x16 sample and treat it as a step that must succeed -- but
+          # `MIN_SHORT_SIDE = 24` landed after this file did, so the command has been exiting 2 (REFUSED)
+          # ever since and the job has been red. Measured locally before changing it.
+          #
+          # The obvious repair is to enlarge the sample. That would throw away the assertion worth having:
+          # "an input below the gate is refused, with exit 2 and the word REFUSED" is a behaviour the rest
+          # of the tool depends on -- `frames` catches the same exception, and the checklist treats exit 2
+          # as "I will not produce this" versus 1 for "produced, with notes". So the small sample stays and
+          # its refusal is asserted; a large one is added to cover the ordinary path.
           python - <<'PY'
           from PIL import Image
-          im = Image.new("RGBA", (16, 16), (0, 0, 0, 0))
-          for y in range(4, 12):
-              for x in range(4, 12):
-                  im.putpixel((x, y), (200, 100, 100, 255))
-          im.save("sample.png")
+          small = Image.new("RGBA", (16, 16), (0, 0, 0, 0))
+          large = Image.new("RGBA", (32, 32), (0, 0, 0, 0))
+          for im in (small, large):
+              step = im.width // 4
+              for y in range(step, im.height - step):
+                  for x in range(step, im.width - step):
+                      im.putpixel((x, y), (200, 100, 100, 255))
+          small.save("edge-small.png")
+          large.save("edge-large.png")
           PY
-          python -m ichiwatashi.cli judge sample.png
-          python -m ichiwatashi.cli judge sample.png --fail-on-note || true
+
+          # the refusal: exit 2, and the word on stdout
+          rc=0
+          python -m ichiwatashi.cli judge edge-small.png > refusal.txt 2>&1 || rc=$?
+          test "$rc" -eq 2 || { echo "expected exit 2 from the small sample, got $rc"; cat refusal.txt; exit 1; }
+          grep -q REFUSED refusal.txt || { echo "expected REFUSED in the output"; cat refusal.txt; exit 1; }
+          echo "the small sample is refused with exit 2, as intended"
+
+          # the ordinary path: the same command on a size the judge measures
+          rc=0
+          python -m ichiwatashi.cli judge edge-large.png > report.txt 2>&1 || rc=$?
+          test "$rc" -eq 0 || test "$rc" -eq 1 || { echo "expected 0 or 1 from the large sample, got $rc"; cat report.txt; exit 1; }
+          test -s report.txt
+          echo "the large sample is measured"
