@@ -33,7 +33,12 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-__all__ = ["Frame", "Timeline", "GifWouldLose"]
+__all__ = ["Frame", "Timeline", "GifWouldLose", "LOSS_KINDS", "read_delays"]
+
+#: The losses GIF cannot avoid, by name. **Two, not three, and the names are what a caller allows.**
+#: A third candidate -- "a frame mixes opaque and transparent pixels" -- was a false positive on every
+#: ordinary sprite and is gone; see `gif_losses`.
+LOSS_KINDS = ("transparency", "palette")
 
 
 class GifWouldLose(Exception):
@@ -317,37 +322,72 @@ class Timeline:
             alphas = [p[3] for p in data]
             semi += sum(1 for a in alphas if 0 < a < 255)
             colours.update(data)
+        # `kinds` is derived here rather than left to the caller: the whole point of naming the losses is that
+        # a caller should not have to re-derive which ones apply from a pair of numbers.
+        kinds = []
+        if semi:
+            kinds.append("transparency")
+        if len(colours) > 256:
+            kinds.append("palette")
         return {
             "semi_transparent_pixels": semi,
             "distinct_colours": len(colours),
             "over_limit": len(colours) > 256,
             "frames": len(frames),
+            "kinds": kinds,
         }
 
-    def to_gif(self, path, *, scale: int = 1, background=None, loop: int = 0, allow_loss: bool = False):
-        """Write an animated GIF, refusing the losses GIF cannot avoid unless `allow_loss` says otherwise.
+    def to_gif(self, path, *, scale: int = 1, background=None, loop: int = 0, allow_loss: bool = False,
+               allow=()):
+        """Write an animated GIF, refusing the losses GIF cannot avoid unless the caller allows them.
 
         **The refusal is the point, and `to_apng` is why it can be offered.** GIF has no alpha channel and a
         256-colour table, so a sprite on a transparent ground, or one with a wide palette, comes out
         different from what was drawn -- silently, before this change. A file that opens and is not what was
         rendered is worse than a refusal, because the reader has nothing to go on.
 
-        `allow_loss=True` writes it anyway and is the caller saying "I know" -- the same shape as
-        `judge(anyway=True)` and the frames-count refusal. `gif_losses` is always available, so a caller can
-        look before deciding.
+        **`allow` names which losses are acceptable, because they are not equally acceptable.** A partly
+        transparent pixel being flattened to opaque-or-clear loses information that cannot be recovered. A
+        palette above 256 being quantised also loses information, but it is a *degree*: the file still shows
+        the right shapes in approximately the right colours. A caller who is fine with the second and not the
+        first had no way to say so -- `allow_loss` was all or nothing, and "I accept quantisation but not
+        flattened alpha" was inexpressible.
+
+            allow={"palette"}      write it, quantised, but refuse if alpha would be flattened
+            allow={"transparency"} the reverse
+            allow=LOSS_KINDS      everything, which is what `allow_loss=True` means
+
+        `gif_losses()["kinds"]` reports which losses are present, so a caller can ask before deciding.
         """
+        if allow_loss:
+            allowed = set(LOSS_KINDS)
+        else:
+            allowed = set(allow)
+            unknown = allowed - set(LOSS_KINDS)
+            if unknown:
+                # an unknown name silently granting nothing would be the "I allowed it and it still refused"
+                # case, which reads as a bug in the refusal rather than a typo in the argument
+                raise ValueError("unknown loss kind(s) %s; known: %s"
+                                 % (sorted(unknown), ", ".join(LOSS_KINDS)))
         losses = self.gif_losses(scale=scale, background=background)
-        problems = []
+        refused, accepted = [], []
         if losses["semi_transparent_pixels"]:
-            problems.append("%d pixel(s) are partly transparent, which GIF cannot represent: they become "
-                            "either fully opaque or fully clear" % losses["semi_transparent_pixels"])
+            msg = ("%d pixel(s) are partly transparent, which GIF cannot represent: they become either "
+                   "fully opaque or fully clear" % losses["semi_transparent_pixels"])
+            (accepted if "transparency" in allowed else refused).append(("transparency", msg))
         if losses["over_limit"]:
-            problems.append("the frames use %d distinct colours where GIF allows 256, so the palette is "
-                            "quantised" % losses["distinct_colours"])
-        if problems and not allow_loss:
-            raise GifWouldLose(
-                "%s would not be what was drawn:\n  %s\nUse to_apng for real alpha and no colour limit, or "
-                "pass allow_loss=True to write it anyway." % (path, "\n  ".join(problems)))
+            msg = ("the frames use %d distinct colours where GIF allows 256, so the palette is quantised"
+                   % losses["distinct_colours"])
+            (accepted if "palette" in allowed else refused).append(("palette", msg))
+        if refused:
+            lines = ["%s would not be what was drawn:" % path]
+            for kind, msg in refused:
+                lines.append("  %s: %s" % (kind, msg))
+            if accepted:
+                lines.append("(allowed: %s)" % ", ".join(k for k, _ in accepted))
+            lines.append("Use to_apng for real alpha and no colour limit, or allow the loss with "
+                         "allow={\"transparency\"} / {\"palette\"} / allow_loss=True.")
+            raise GifWouldLose("\n".join(lines))
         from PIL import Image
 
         frames = self.compose(background=background)

@@ -977,6 +977,98 @@ class TestPackaging(unittest.TestCase):
             shutil.rmtree(d, ignore_errors=True)
 
 
+class TestAllowingLossesOneAtATime(unittest.TestCase):
+    """The two GIF losses are not equally acceptable, and `allow` says which is which.
+
+    **The problem.** `allow_loss` was a boolean, so a caller who accepts quantisation but not flattened alpha
+    could only grant both or neither. Those losses are not the same kind of thing: **flattening a partly
+    transparent pixel destroys information that cannot be recovered**, while quantising above 256 colours
+    keeps the shapes and approximates the colours -- a loss of degree.
+
+    **And a third candidate was removed, not merely disallowed.** "A frame mixes opaque and transparent
+    pixels" flagged every ordinary sprite and was deleted; `LOSS_KINDS` holds two names, and a test asserts
+    that count so a re-added false positive would be visible.
+    """
+
+    @staticmethod
+    def _both(size=40, n=3):
+        """A timeline that has both losses: partly transparent pixels, and more than 256 colours."""
+        tl = F.Timeline(size, size)
+        for i in range(n):
+            im = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+            px = im.load()
+            for y in range(size):
+                for x in range(size):
+                    a = 128 if (12 <= x < 26 and 12 <= y < 26) else 255
+                    px[x, y] = ((x * 7) % 256, (y * 11) % 256, (x * y) % 256, a)
+            tl.add(im, pivot=(size // 2, size - 1), duration_ms=80)
+        return tl
+
+    def test_exactly_two_kinds_exist(self):
+        """A false-positive kind would change this number; that is why it is asserted."""
+        self.assertEqual(F.LOSS_KINDS, ("transparency", "palette"))
+
+    def test_gif_losses_reports_which_kinds_are_present(self):
+        kinds = self._both().gif_losses()["kinds"]
+        self.assertIn("transparency", kinds)
+        self.assertIn("palette", kinds)
+
+    def test_allowing_one_kind_still_refuses_the_other(self):
+        tl = self._both()
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaises(F.GifWouldLose) as ctx:
+                tl.to_gif(Path(d) / "a.gif", allow={"palette"})
+            msg = str(ctx.exception)
+            self.assertIn("transparency", msg, "the refused kind must be named")
+            self.assertIn("allowed: palette", msg, "and what was granted must be stated too")
+            self.assertNotIn("palette:", msg.split("would not be what was drawn")[1],
+                             "the allowed kind must not appear in the refused list")
+            self.assertFalse((Path(d) / "a.gif").exists())
+
+    def test_allowing_both_writes_it(self):
+        tl = self._both()
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "b.gif"
+            tl.to_gif(p, allow=set(F.LOSS_KINDS))
+            self.assertTrue(p.is_file())
+
+    def test_allow_loss_still_means_everything(self):
+        """The boolean is kept as shorthand, and it has to stay equivalent to the full set."""
+        tl = self._both()
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "c.gif"
+            tl.to_gif(p, allow_loss=True)
+            self.assertTrue(p.is_file())
+
+    def test_a_kind_that_does_not_exist_is_refused_by_name(self):
+        """A typo must not quietly grant nothing and then look like a broken refusal."""
+        tl = self._both()
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaises(ValueError) as ctx:
+                tl.to_gif(Path(d) / "d.gif", allow={"colour"})
+            self.assertIn("unknown loss kind", str(ctx.exception))
+            self.assertIn("transparency", str(ctx.exception), "the known names must be listed")
+
+    def test_the_cli_accepts_a_single_kind(self):
+        from ichiwatashi.cli import main
+        with tempfile.TemporaryDirectory() as d:
+            size = 48
+            for i in range(6):
+                im = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+                px = im.load()
+                for y in range(8, 40):
+                    for x in range(8, 40):
+                        px[x, y] = (200, 60, 60, 255)
+                for y in range(20, 28):
+                    for x in range(18 + i, 24 + i):
+                        px[x, y] = (90, 60, 150, 128)
+                im.save(Path(d) / ("f%02d.png" % i))
+            # only the transparency loss is at stake in this fixture, so allowing palette changes nothing
+            self.assertEqual(main(["frames", d, "--gif", str(Path(d) / "x.gif"), "--allow", "palette"]), 2)
+            self.assertIn(main(["frames", d, "--gif", str(Path(d) / "x.gif"), "--allow", "transparency"]),
+                          (0, 1))
+
+
 class TestTheClearGroundIsNotAColour(unittest.TestCase):
     """`sample()` was counting the transparent region as a colour, and on real art it ranked first.
 

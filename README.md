@@ -262,6 +262,27 @@ REFUSED: out.gif would not be what was drawn:
 Use to_apng for real alpha and no colour limit, or pass allow_loss=True to write it anyway.
 ```
 
+**The two losses are not equally acceptable, so they can be allowed one at a time.**
+
+| kind | what it costs |
+| --- | --- |
+| `transparency` | a partly transparent pixel becomes opaque or clear — **information that cannot be recovered** |
+| `palette` | above 256 colours the palette is quantised — a loss of **degree**: shapes stay, colours approximate |
+
+```
+ichiwatashi frames DIR --gif out.gif --allow palette
+REFUSED: out.gif would not be what was drawn:
+  transparency: 288 pixel(s) are partly transparent, which GIF cannot represent: they become either fully
+  opaque or fully clear
+Use to_apng for real alpha and no colour limit, or allow the loss with allow={"transparency"} /
+{"palette"} / allow_loss=True.
+```
+
+`gif_losses()["kinds"]` says which losses are present, so a caller can ask before deciding, and a misspelled
+kind is refused by name — otherwise "I allowed it and it still refused" reads as a broken refusal rather than
+a typo. `LOSS_KINDS` holds **two** names, and a test asserts that count: a third candidate ("a frame mixes
+opaque and transparent pixels") turned out to flag every ordinary sprite and was removed.
+
 `--allow-loss` (or `allow_loss=True`) is the caller saying "I know" — the same shape as `judge(anyway=True)`
 and the frames-count refusal. The refusal **leaves no file behind**, because a file that opens and is not
 what was drawn is worse than no file: the reader has nothing to go on.

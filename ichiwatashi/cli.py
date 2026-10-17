@@ -397,9 +397,15 @@ def cmd_frames(a):
         # the caller saying "I know". Exit code 2 for the same reason the frames-count refusal uses it:
         # "I will not produce this" is a different answer from "I produced it and it has notes".
         try:
-            tl.to_gif(a.gif, scale=a.scale, allow_loss=a.allow_loss)
+            # **The kinds are passed through rather than collapsed to a boolean.** A caller who accepts
+            # quantisation but not flattened alpha can now say so; before this, `--allow-loss` granted both
+            # and nothing granted one.
+            tl.to_gif(a.gif, scale=a.scale, allow_loss=a.allow_loss, allow=set(a.allow or ()))
             print("wrote %s" % a.gif)
         except F.GifWouldLose as e:
+            print("REFUSED: %s" % e)
+            return 2
+        except ValueError as e:
             print("REFUSED: %s" % e)
             return 2
     # **`p` was rebound by the comprehension above, and that shadowing hid a second bug.** `ims` holds
@@ -654,7 +660,12 @@ def main(argv=None):
     f.add_argument("--gif", help="write an animated GIF here; refused when the frames cannot be "
                                  "represented without loss, unless --allow-loss is given")
     f.add_argument("--allow-loss", action="store_true",
-                   help="write the GIF even though it will not be what was drawn")
+                   help="allow every loss: shorthand for --allow transparency --allow palette")
+    f.add_argument("--allow", action="append", choices=("transparency", "palette"), default=None,
+                   metavar="KIND",
+                   help="allow one kind of loss and still refuse the others; repeatable. "
+                        "transparency = partly transparent pixels are flattened, palette = above 256 colours "
+                        "is quantised")
     f.add_argument("--width", type=int)
     f.add_argument("--height", type=int)
     f.add_argument("--duration", type=int, default=100,
