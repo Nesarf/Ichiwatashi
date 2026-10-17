@@ -51,7 +51,9 @@ from ichiwatashi.judge import _opaque
 from ichiwatashi import palette as P
 from ichiwatashi import perceptual as PC
 from ichiwatashi import figures as FIG
+from ichiwatashi import keys as KEYS
 from ichiwatashi import panel as PANEL
+from ichiwatashi import terminal as TERM
 
 
 def coords_note(r):
@@ -1147,6 +1149,171 @@ class TestPanel(unittest.TestCase):
         self.assertTrue(used <= set(self.PALETTE.values()),
                         "colours outside the palette: %r" % (used - set(self.PALETTE.values())))
 
+
+class TestKeyboardModel(unittest.TestCase):
+    """Keys as a model, before any window: which key means what, and where the focus goes.
+
+    **"A keyboard-operable window" sounds like a GUI problem and is mostly not one.** What a window *does* with
+    a key -- which widget is next, whether Enter activates, whether Escape backs out -- is a small state
+    machine, and it is the part that can be wrong. The toolkit is a delivery mechanism. So these tests run
+    without a display, a terminal, or a keyboard.
+    """
+
+    def test_escape_sequences_are_tried_longest_first(self):
+        """**The order is the whole difficulty.** `\x1b[Z` starts with `\x1b`, so a table tried in the wrong
+        order reports every arrow key as Escape plus two stray characters -- and the symptom is a window that
+        closes when you press Up."""
+        self.assertEqual(KEYS.parse_key("\x1b[Z"), "shift+tab")
+        self.assertEqual(KEYS.parse_key("\x1b[A"), "up")
+        self.assertEqual(KEYS.parse_key("\x1b[B"), "down")
+        self.assertEqual(KEYS.parse_key("\x1b"), "esc")
+
+    def test_a_printable_key_is_one_namespace_and_matched_by_its_letter(self):
+        """`parse_key("q")` is `char:q`, and the bindings table says `q`.
+
+        **The first version looked up only the full name**, so `"q": "quit"` sat in the table and never fired:
+        measured, pressing `q` returned `ignored`. A `char:` key that is not found verbatim is now looked up by
+        the letter alone.
+        """
+        self.assertEqual(KEYS.parse_key("q"), "char:q")
+        self.assertEqual(KEYS.parse_key("Q"), "char:q", "case does not make a different key")
+        self.assertEqual(KEYS.action_for("char:q"), "quit")
+        self.assertEqual(KEYS.action_for("char:z"), None, "an unbound key stays unbound")
+
+    def test_the_focus_ring_wraps_in_both_directions(self):
+        f = KEYS.Focus(3)
+        self.assertEqual([f.apply("focus_next") for _ in range(4)], ["moved"] * 4)
+        self.assertEqual(f.index, 1, "three nexts from 0 land on 1 after wrapping once")
+        f2 = KEYS.Focus(3)
+        f2.apply("focus_prev")
+        self.assertEqual(f2.index, 2, "one step back from the start wraps to the end")
+
+    def test_actions_report_what_happened_rather_than_mutating_the_world(self):
+        f = KEYS.Focus(2)
+        self.assertEqual(f.press("\t"), ("tab", "focus_next", "moved"))
+        self.assertEqual(f.press("\r"), ("enter", "activate", "activated"))
+        self.assertEqual(f.press("\x1b"), ("esc", "cancel", "left"))
+        self.assertEqual(f.press("z"), ("char:z", None, "ignored"))
+
+    def test_an_empty_ring_ignores_movement_and_activation(self):
+        """A window with no controls is a legitimate state, not an error."""
+        f = KEYS.Focus(0)
+        self.assertEqual(f.apply("focus_next"), "ignored")
+        self.assertEqual(f.apply("activate"), "ignored")
+        self.assertEqual(f.index, 0)
+
+    def test_refusals_are_by_name(self):
+        for bad in ("", "ab", "\x01"):
+            with self.assertRaises(ValueError):
+                KEYS.parse_key(bad)
+        with self.assertRaises(ValueError) as ctx:
+            KEYS.action_for("tab", bindings={"tab": "focus_sideways"})
+        self.assertIn("focus_sideways", str(ctx.exception))
+        with self.assertRaises(ValueError):
+            KEYS.Focus(3, index=5)
+        with self.assertRaises(ValueError):
+            KEYS.Focus(-1)
+
+
+class TestTerminalRendering(unittest.TestCase):
+    """One character per logical pixel, so the interface can be compared as a string.
+
+    **A toolkit window cannot be checked this way** -- what a test can see of it is whatever the toolkit
+    exposes, which is not the pixels. A character grid *is* the rendering.
+    """
+
+    def test_the_geometry_comes_from_the_panel_layout(self):
+        """Two independent ideas of where a border goes is the defect `panel` already fixed once."""
+        spec, w, h = PANEL.tier("compact")
+        for name in sorted(PANEL.TIERS):
+            spec, w, h = PANEL.tier(name)
+            lines = TERM.rows(spec, w, h)
+            self.assertEqual(len(lines), h)
+            self.assertTrue(all(len(line) == w for line in lines))
+            where = PANEL.layout(spec, w, h)
+            fx0, fy0, fx1, fy1 = where["frame"]
+            self.assertEqual(set(lines[fy0]), {"#"}, "the top row is the frame")
+            self.assertEqual(set(lines[fy1 - 1]), {"#"}, "and so is the bottom")
+            self.assertTrue(all(line[fx0] == "#" and line[fx1 - 1] == "#" for line in lines),
+                            "and both side columns")
+
+    def test_the_two_title_bars_are_different_characters(self):
+        spec, w, h = PANEL.tier("normal")
+        active = TERM.rows(spec, w, h, title="Ichi")
+        inactive = TERM.rows(spec, w, h, title="Ichi", active=False)
+        self.assertNotEqual(active, inactive, "the state has to be visible in the text too")
+        where = PANEL.layout(spec, w, h)
+        right = where["title"][2] - 2
+        self.assertEqual(active[where["title"][1]][right], "-")
+        self.assertEqual(inactive[where["title"][1]][right], ".")
+
+    def test_the_title_is_drawn_as_glyphs(self):
+        spec, w, h = PANEL.tier("normal")
+        lines = TERM.rows(spec, w, h, title="Ichi")
+        joined = "".join(lines)
+        self.assertIn("#", joined, "glyph pixels are the heavy mark")
+        # and the glyph rows sit inside the title band
+        where = PANEL.layout(spec, w, h)
+        band = "".join(lines[where["title"][1] + 1:where["title"][3]])
+        self.assertIn("#", band)
+
+    def test_a_title_that_does_not_fit_is_refused(self):
+        spec, w, h = PANEL.tier("compact")
+        with self.assertRaises(ValueError) as ctx:
+            TERM.rows(spec, w, h, title="A title far too long for this tier")
+        self.assertIn("columns", str(ctx.exception))
+
+    def test_the_status_line_names_the_focus(self):
+        self.assertIn("focus 2/3", TERM.status_line(focus=KEYS.Focus(3, index=1)))
+        self.assertIn("inactive", TERM.status_line(focus=KEYS.Focus(1), active=False))
+        self.assertIn("no control focused", TERM.status_line(focus=KEYS.Focus(0)))
+        self.assertIn("hint", TERM.status_line(focus=KEYS.Focus(1), hint="hint"))
+
+    def test_the_cli_prints_the_window_and_a_transcript(self):
+        """The focus ring is driven from the command line, so "keyboard-operable" has a transcript to read.
+
+        **That is the point of splitting the model from the toolkit**: a real window would need a display to
+        demonstrate this, and the thing worth demonstrating is the state machine.
+        """
+        import contextlib
+        import io as _io
+        from ichiwatashi.cli import main
+        buf = _io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = main(["panel", "--tier", "compact", "--title", "Ichi", "--controls", "3",
+                       "--dispatch", "focus_next focus_next activate", "--text"])
+        out = buf.getvalue()
+        self.assertEqual(rc, 0)
+        self.assertIn("focus_next   -> moved", out)
+        self.assertIn("activate     -> activated", out)
+        self.assertIn("#", out, "and the window itself is printed")
+        self.assertIn("focus 3/3", out, "the status line reports where the focus ended up")
+
+    def test_the_cli_refuses_an_unknown_action_with_exit_two(self):
+        import contextlib
+        import io as _io
+        from ichiwatashi.cli import main
+        buf = _io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = main(["panel", "--dispatch", "focus_sideways", "--text"])
+        self.assertEqual(rc, 2)
+        self.assertIn("not an action", buf.getvalue())
+
+    def test_the_cli_wants_a_destination_or_the_text_flag(self):
+        import contextlib
+        import io as _io
+        from ichiwatashi.cli import main
+        buf = _io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = main(["panel"])
+        self.assertEqual(rc, 2)
+        self.assertIn("--text", buf.getvalue(), "the way out has to be stated")
+
+    def test_a_whole_frame_includes_the_status_line(self):
+        spec, w, h = PANEL.tier("compact")
+        block = TERM.frame(spec, w, h, title="Ichi", focus=KEYS.Focus(2), hint="tab")
+        self.assertEqual(len(block), h + 1)
+        self.assertIn("focus 1/2", block[-1])
 
 class TestDelaysFromAnArchive(unittest.TestCase):
     """An animation archive, read for timing it may or may not carry.

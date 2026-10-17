@@ -349,6 +349,30 @@ def cmd_panel(a):
         if len(problems) > 8:
             print("  ... and %d more" % (len(problems) - 8))
         return 2
+    # **the focus ring lives in the key model, not in a toolkit**, so a transcript can be produced and read
+    # here without a display. That is what makes "keyboard-operable" verifiable instead of demonstrated.
+    from . import keys as K
+    from . import terminal as TERM
+
+    focus = K.Focus(a.controls, index=min(a.focus, max(0, a.controls - 1)) if a.controls else 0)
+    if a.dispatch:
+        print("  controls: %d, starting at %d" % (focus.count, focus.index))
+        for name in a.dispatch.split():
+            try:
+                effect = focus.apply(name)
+            except ValueError as exc:
+                print("REFUSED: %s" % exc)
+                return 2
+            print("    %-12s -> %-10s index=%d" % (name, effect, focus.index))
+        print()
+    if a.text:
+        for line in TERM.frame(spec, width, height, title=a.title, active=not a.inactive,
+                               focus=focus if a.controls else None, hint=a.hint):
+            print(line)
+        return 0
+    if not a.out:
+        print("REFUSED: give an output path, or pass --text to print the window instead")
+        return 2
     im = Pn.render(spec, width, height, keys=Pn.PANEL_KEYS, palette=Pn.PANEL_PALETTE,
                    title=a.title, scale=a.scale, active=not a.inactive)
     im.save(a.out)
@@ -705,7 +729,16 @@ def main(argv=None):
     ft.set_defaults(func=cmd_font)
 
     pn = sub.add_parser("panel", help="draw a panel and verify it against its own layout")
-    pn.add_argument("out", help="where to write the PNG")
+    pn.add_argument("out", nargs="?", help="where to write the PNG; omit with --text")
+    pn.add_argument("--text", action="store_true",
+                    help="print the window as text (one character per logical pixel) instead of writing a PNG")
+    pn.add_argument("--controls", type=int, default=0,
+                    help="how many controls the focus ring holds (0 = none, and the status line says so)")
+    pn.add_argument("--focus", type=int, default=0, help="which control starts with the focus")
+    pn.add_argument("--dispatch", metavar="ACTIONS",
+                    help="apply a space-separated action list to the focus ring and print what each did "
+                         "(focus_next focus_prev activate cancel close quit)")
+    pn.add_argument("--hint", help="a line of help text shown in the status line")
     pn.add_argument("--tier", choices=tuple(PANEL_TIERS), default="normal",
                    help="a size tier: one layout at several sizes (default normal)")
     pn.add_argument("--width", type=int, default=None, help="override the tier's width")

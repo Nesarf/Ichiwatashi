@@ -172,8 +172,46 @@ t-compact.png  compact tier 72x30, written at 216x90, active
   2160 pixel(s) checked, 0 disagreed with the layout
 ```
 
-What a window still lacks is **input** — a keyboard-operable pixel-art window with no GUI toolkit — and that
-is a decision (toolkit, terminal, or self-drawn window) rather than a rendering detail.
+### Input: a model, not a toolkit
+
+"A keyboard-operable window" sounds like a GUI problem and is mostly not one. What a window *does* with a key —
+which control is next, whether Enter activates or closes, whether Escape backs out — is a small state machine,
+and **that is the part that can be wrong**. The toolkit only delivers the keystroke.
+
+So `ichiwatashi/keys.py` contains no toolkit at all:
+
+```
+$ ichiwatashi panel --tier compact --title "Ichi" --controls 3 \
+    --dispatch "focus_next focus_next activate" --text
+  controls: 3, starting at 0
+    focus_next   -> moved      index=1
+    focus_next   -> moved      index=2
+    activate     -> activated  index=2
+
+########################################################################
+#++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+#+--------------------------------------------------------------------##
+#+---###--------------------------------------------------------------##
+...
+active  focus 3/3
+```
+
+**One character is one logical pixel**, so the interface can be compared as a string — which a toolkit window
+cannot be: what a test can see of it is whatever the toolkit exposes, and that is not the pixels. The geometry
+comes from `panel.layout`, because two independent ideas of where a border goes is the defect this repository
+already fixed once.
+
+Two things the split bought, both measured:
+
+- **The escape-sequence order is now a test.** `\x1b[Z` starts with `\x1b`, so a table tried in the wrong order
+  reads every arrow key as Escape plus stray characters — **the symptom is a window that closes when you press
+  Up**. Longest-first is asserted.
+- **A binding that never fired.** `parse_key("q")` returns `char:q` while the table says `q`, so `"q": "quit"`
+  sat there and never triggered — measured, pressing `q` returned `ignored`. A `char:` key not found verbatim
+  is now looked up by its letter.
+
+Measured availability before choosing any of this: `tkinter` present, `msvcrt` present, `curses` and `termios`
+absent, terminal 80 by 24 — **so a real window is reachable; what was decided first is what to verify.**
 
 ## The clear ground is not a colour
 
