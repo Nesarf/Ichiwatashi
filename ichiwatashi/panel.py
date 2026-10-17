@@ -33,26 +33,49 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-__all__ = ["PanelSpec", "PANEL_ROLES", "PANEL_KEYS", "PANEL_PALETTE",
+__all__ = ["PanelSpec", "PANEL_ROLES", "PANEL_KEYS", "PANEL_PALETTE", "TIERS", "tier",
            "layout", "draw", "render", "check"]
 
 
 #: Which job each colour does in a panel. **Named rather than positional**, because the whole reason the
 #: shared layer is produced once is that four tools must not each invent their own four jobs.
-PANEL_ROLES = ("frame_dark", "frame_light", "title", "title_text", "well", "content")
+#: **A panel becomes a window when its title bar can show whether it is the active one.** Two title roles
+#: rather than a tint applied at render time, because the difference has to be a *role* for `check` to verify
+#: it -- a tint would be a rendering detail that no test could see.
+PANEL_ROLES = ("frame_dark", "frame_light", "title", "title_inactive", "title_text", "well", "content")
 
 #: One key per role. **Unique even where two roles share a colour**, because `check` compares keys: a shared
 #: key would let a pixel in the title bar satisfy the frame's expectation, and the check would pass on a panel
 #: with its parts in the wrong places.
-PANEL_KEYS = {"frame_dark": "fd", "frame_light": "fl", "title": "tt",
+PANEL_KEYS = {"frame_dark": "fd", "frame_light": "fl", "title": "ta", "title_inactive": "ti",
               "title_text": "tx", "well": "wl", "content": "ct"}
+
+#: The size tiers, as `(width, height)` in logical pixels. **One layout at three sizes, not three layouts** --
+#: which is only true if every tier passes the same check, and a test asserts that. The narrowest tier is sized
+#: so the default title bar can hold a five-character title; anything longer is refused with both numbers, at
+#: whatever tier it was asked for.
+TIERS = {
+    "compact": (72, 30),
+    "normal": (96, 40),
+    "wide": (160, 48),
+}
+
+
+def tier(name):
+    """`(PanelSpec(), width, height)` for a named size, refused by name if it is not one."""
+    if name not in TIERS:
+        raise ValueError("unknown tier %r; known: %s" % (name, ", ".join(sorted(TIERS))))
+    w, h = TIERS[name]
+    return PanelSpec(), w, h
+
 
 #: A default set of colours for those keys: a dark window, as a starting point rather than a house style.
 #: Callers pass their own -- what this layer shares is the measurements, not one palette.
 PANEL_PALETTE = {
     "fd": (24, 22, 32, 255),      # outermost ring
     "fl": (96, 88, 128, 255),     # the bevel's lit edge
-    "tt": (52, 44, 72, 255),      # title bar
+    "ta": (52, 44, 72, 255),      # title bar, active
+    "ti": (30, 27, 40, 255),      # title bar, inactive -- darker and desaturated, the usual cue
     "tx": (232, 228, 244, 255),   # title text
     "wl": (36, 32, 48, 255),      # the well's floor
     "ct": (60, 52, 84, 255),      # content area
@@ -103,7 +126,7 @@ def layout(spec, width, height):
     }
 
 
-def _role_at(spec, where, x, y):
+def _role_at(spec, where, x, y, *, active=True):
     """The role a pixel at `(x, y)` carries. **The single definition** that `draw` and `check` both walk.
 
     Order matters and is what makes a report readable: frame, then its bevel, then the title, then the well,
@@ -136,13 +159,15 @@ def _role_at(spec, where, x, y):
     if inside(where["content"]):
         return "content"
     if inside(where["title"]):
-        return "title"
+        # **the one place a window differs from a panel**: the title bar's colour is the visible record of
+        # whether this window is the active one
+        return "title" if active else "title_inactive"
     if inside(where["well"]):
         return "well"
     return "frame_dark"
 
 
-def draw(spec, width, height, *, keys, title=None, body=None, glyphs=None):
+def draw(spec, width, height, *, keys, title=None, body=None, glyphs=None, active=True):
     """Render a panel onto a fresh canvas at one pixel per pixel.
 
     `keys` maps every `PANEL_ROLES` entry to a `builder` key. **Nothing is defaulted**, because a default
@@ -163,7 +188,7 @@ def draw(spec, width, height, *, keys, title=None, body=None, glyphs=None):
     cv = B.Canvas(width, height)
     for y in range(height):
         for x in range(width):
-            role = _role_at(spec, where, x, y)
+            role = _role_at(spec, where, x, y, active=active)
             if role is not None:
                 cv.put(x, y, keys[role])
     cx0, cy0, cx1, cy1 = where["content"]
@@ -191,7 +216,8 @@ def draw(spec, width, height, *, keys, title=None, body=None, glyphs=None):
     return cv
 
 
-def render(spec, width, height, *, keys, palette, title=None, body=None, glyphs=None, scale: int = 1):
+def render(spec, width, height, *, keys, palette, title=None, body=None, glyphs=None, scale: int = 1,
+           active=True):
     """A panel as an image, at one pixel per pixel then an **integer** nearest-neighbour upscale.
 
     The upscale is integer and `NEAREST` because that is this project's rule everywhere: a fractional resize
@@ -200,7 +226,7 @@ def render(spec, width, height, *, keys, palette, title=None, body=None, glyphs=
     """
     if not isinstance(scale, int) or scale < 1:
         raise ValueError("scale must be a positive whole number, got %r" % (scale,))
-    cv = draw(spec, width, height, keys=keys, title=title, body=body, glyphs=glyphs)
+    cv = draw(spec, width, height, keys=keys, title=title, body=body, glyphs=glyphs, active=active)
     im = cv.to_image(palette)
     if scale != 1:
         from PIL import Image
@@ -209,7 +235,7 @@ def render(spec, width, height, *, keys, palette, title=None, body=None, glyphs=
     return im
 
 
-def check(spec, canvas, *, keys, title=None):
+def check(spec, canvas, *, keys, title=None, active=True):
     """Re-read a rendered panel and report every pixel that disagrees with `layout`.
 
     Returns a list of `(x, y, expected_role, found_key)`, **empty when the panel is what `layout` says**.
@@ -242,7 +268,7 @@ def check(spec, canvas, *, keys, title=None):
     problems = []
     for y in range(canvas.height):
         for x in range(canvas.width):
-            role = _role_at(spec, where, x, y)
+            role = _role_at(spec, where, x, y, active=active)
             if role is None:
                 continue
             if skip and skip[0] <= x < skip[2] and skip[1] <= y < skip[3]:

@@ -993,11 +993,12 @@ class TestPanel(unittest.TestCase):
     and saved successfully, which is the same failure as a figure whose label ran off its canvas.
     """
 
-    ROLES = ("frame_dark", "frame_light", "title", "title_text", "well", "content")
-    KEYS = {"frame_dark": "d", "frame_light": "l", "title": "t",
-            "title_text": "w", "well": "b", "content": "."}
-    PALETTE = {"d": (24, 20, 32, 255), "l": (96, 88, 128, 255), "t": (52, 44, 72, 255),
-               "w": (232, 228, 244, 255), "b": (36, 32, 48, 255), ".": (60, 52, 84, 255)}
+    # **Taken from the implementation, not copied.** A local copy of the role table is a second definition,
+    # and when the two title roles were added this copy silently went stale and eight tests failed -- which is
+    # the tests noticing, but only after the fact. The keys used here are the ones the module ships.
+    ROLES = PANEL.PANEL_ROLES
+    KEYS = dict(PANEL.PANEL_KEYS)
+    PALETTE = dict(PANEL.PANEL_PALETTE)
 
     def test_a_correct_panel_has_no_problems(self):
         cv = PANEL.draw(PANEL.PanelSpec(), 96, 40, keys=self.KEYS, title="Hi")
@@ -1017,7 +1018,7 @@ class TestPanel(unittest.TestCase):
         self.assertEqual(PANEL.check(PANEL.PanelSpec(), cv, keys=self.KEYS), [])
         cv.put(0, 0, self.KEYS["frame_light"])
         problems = PANEL.check(PANEL.PanelSpec(), cv, keys=self.KEYS)
-        self.assertEqual(problems, [(0, 0, "frame_dark", "l")])
+        self.assertEqual(problems, [(0, 0, "frame_dark", self.KEYS["frame_light"])])
 
     def test_the_dithering_pattern_of_the_bevel_is_lit_top_left_and_shaded_bottom_right(self):
         """A bevel is asymmetric by definition; the first version had the two sides disagree."""
@@ -1032,19 +1033,23 @@ class TestPanel(unittest.TestCase):
         inner_left = [cv.get(fx0 + 1, y) for y in range(fy0 + 1, fy1 - 1)]
         inner_bottom = [cv.get(x, fy1 - 2) for x in range(fx0 + 1, fx1 - 1)]
         inner_right = [cv.get(fx1 - 2, y) for y in range(fy0 + 1, fy1 - 1)]
-        self.assertEqual(set(inner_top), {"l"}, "the whole top inner ring is lit: %r" % (set(inner_top),))
-        self.assertEqual(set(inner_left), {"l"}, "and the whole left one: %r" % (set(inner_left),))
+        self.assertEqual(set(inner_top), {self.KEYS["frame_light"]},
+                         "the whole top inner ring is lit: %r" % (set(inner_top),))
+        self.assertEqual(set(inner_left), {self.KEYS["frame_light"]},
+                         "and the whole left one: %r" % (set(inner_left),))
         # **The corners belong to two edges, and the renderer gives them to the top and the left.** So the
         # bottom and right inner rings start with one lit pixel each -- measured: the bottom reads
         # `'l' + 'd' * 94`. Excluding the end pixels is asserting what the rule actually says rather than
         # asserting a symmetry the rule does not claim.
-        self.assertEqual(set(inner_bottom[1:]), {"d"},
+        self.assertEqual(set(inner_bottom[1:]), {self.KEYS["frame_dark"]},
                          "the bottom inner ring is shaded apart from the corner: %r"
                          % (set(inner_bottom),))
-        self.assertEqual(set(inner_right[1:]), {"d"},
+        self.assertEqual(set(inner_right[1:]), {self.KEYS["frame_dark"]},
                          "and the right one too: %r" % (set(inner_right),))
-        self.assertEqual(inner_bottom[0], "l", "the bottom-left corner is on the lit left edge")
-        self.assertEqual(inner_right[0], "l", "and the top-right corner is on the lit top edge")
+        self.assertEqual(inner_bottom[0], self.KEYS["frame_light"],
+                         "the bottom-left corner is on the lit left edge")
+        self.assertEqual(inner_right[0], self.KEYS["frame_light"],
+                         "and the top-right corner is on the lit top edge")
 
     def test_a_missing_role_is_refused(self):
         keys = dict(self.KEYS)
@@ -1084,6 +1089,42 @@ class TestPanel(unittest.TestCase):
         for bad in (0, -1, 1.5, "2"):
             with self.assertRaises(ValueError):
                 PANEL.render(PANEL.PanelSpec(), 96, 40, keys=self.KEYS, palette=self.PALETTE, scale=bad)
+
+    def test_every_size_tier_passes_the_same_check(self):
+        """**One layout at three sizes, not three layouts** -- and only this assertion makes that true."""
+        for name in sorted(PANEL.TIERS):
+            spec, w, h = PANEL.tier(name)
+            cv = PANEL.draw(spec, w, h, keys=self.KEYS, title="Ichi")
+            problems = PANEL.check(spec, cv, keys=self.KEYS, title="Ichi")
+            self.assertEqual(problems, [], "tier %r at %dx%d: %r" % (name, w, h, problems[:3]))
+
+    def test_an_unknown_tier_is_refused_by_name(self):
+        with self.assertRaises(ValueError) as ctx:
+            PANEL.tier("enormous")
+        self.assertIn("enormous", str(ctx.exception))
+        self.assertIn("compact", str(ctx.exception), "the known names must be listed")
+
+    def test_window_state_is_visible_to_the_check(self):
+        """**What makes this a window rather than a panel.** The active title bar is a different role, so a
+        panel drawn active and checked as inactive reports a problem at every title-bar pixel."""
+        spec, w, h = PANEL.tier("normal")
+        for drawn_active in (True, False):
+            cv = PANEL.draw(spec, w, h, keys=self.KEYS, title="Ichi", active=drawn_active)
+            self.assertEqual(PANEL.check(spec, cv, keys=self.KEYS, title="Ichi", active=drawn_active), [])
+            wrong = PANEL.check(spec, cv, keys=self.KEYS, title="Ichi", active=not drawn_active)
+            self.assertGreater(len(wrong), 100,
+                               "checking the wrong state must be loud, not silent: %d" % len(wrong))
+            self.assertTrue(all(p[2].startswith("title") for p in wrong),
+                            "and every problem is in the title bar: %r" % (wrong[:3],))
+
+    def test_the_tiers_differ_in_size_and_agree_on_the_layout(self):
+        """The parts must be in the same relative places, which is what "one layout" means."""
+        for name in sorted(PANEL.TIERS):
+            spec, w, h = PANEL.tier(name)
+            where = PANEL.layout(spec, w, h)
+            self.assertEqual(where["frame"], (0, 0, w, h))
+            self.assertEqual(where["title"][0], spec.border)
+            self.assertEqual(where["content"][0], spec.border + spec.pad)
 
     def test_the_cli_verifies_before_writing(self):
         """A panel nobody checked is a panel somebody else inherits unchecked."""

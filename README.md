@@ -154,6 +154,27 @@ verifies nothing.** What the check now verifies is the pixels against the layout
 The defaults derive from the font: `title_h = 9` because a 5x7 glyph needs a pixel of clearance above and
 below. A title bar that cannot hold a glyph is not a title bar.
 
+### What makes it a window rather than a panel
+
+Two things, and both are **checkable properties rather than rendering choices**:
+
+- **Size tiers.** `compact` 72x30, `normal` 96x40, `wide` 160x48 — **one layout at three sizes**, which is only
+  true because every tier passes the same `check`. A test asserts that, and it is what keeps three tiers from
+  becoming three layouts.
+- **Activity.** The title bar's colour is the visible record of whether a window is the active one, so
+  `title` and `title_inactive` are two **roles**, not a tint applied at render time. Measured: a panel drawn
+  active and checked as inactive reports **751 problems**, all in the title bar. **A tint would have been a
+  detail no test could see.**
+
+```
+ichiwatashi panel out.png --tier compact --title "Ichi" --scale 3
+t-compact.png  compact tier 72x30, written at 216x90, active
+  2160 pixel(s) checked, 0 disagreed with the layout
+```
+
+What a window still lacks is **input** — a keyboard-operable pixel-art window with no GUI toolkit — and that
+is a decision (toolkit, terminal, or self-drawn window) rather than a rendering detail.
+
 ## The clear ground is not a colour
 
 `palette.sample` merges near-duplicates first — a sampler that does not merge measures the encoder, not the

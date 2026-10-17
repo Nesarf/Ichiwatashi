@@ -15,6 +15,10 @@ from . import calibration as C
 #: The font source that ships with the package. One definition, resolved from this module, because
 #: `figures.FONT_PATH` used to be a bare relative string and broke whenever the cwd was not the repo.
 FONT_SOURCE = Path(__file__).resolve().parent / "assets" / "font5x7.txt"
+
+#: The panel size tiers, read from the panel module so --tier validates against what exists.
+from . import panel as _panel
+PANEL_TIERS = tuple(sorted(_panel.TIERS))
 from .judge import outline_style
 from .scope import MIN_SHORT_SIDE as SCOPE_MIN
 
@@ -319,13 +323,22 @@ def cmd_panel(a):
     """
     from . import panel as Pn
 
-    spec = Pn.PanelSpec(border=a.border, title_h=a.title_h, pad=a.pad, bevel=not a.no_bevel)
     try:
-        canvas = Pn.draw(spec, a.width, a.height, keys=Pn.PANEL_KEYS, title=a.title)
+        base, tw, th = Pn.tier(a.tier)
     except ValueError as exc:
         print("REFUSED: %s" % exc)
         return 2
-    problems = Pn.check(spec, canvas, keys=Pn.PANEL_KEYS, title=a.title)
+    # **an explicit --width / --height overrides the tier**, so the tier is a starting point and not a
+    # constraint -- but the layout is the same either way, which is what `check` verifies below.
+    width = a.width if a.width is not None else tw
+    height = a.height if a.height is not None else th
+    spec = Pn.PanelSpec(border=a.border, title_h=a.title_h, pad=a.pad, bevel=not a.no_bevel)
+    try:
+        canvas = Pn.draw(spec, width, height, keys=Pn.PANEL_KEYS, title=a.title, active=not a.inactive)
+    except ValueError as exc:
+        print("REFUSED: %s" % exc)
+        return 2
+    problems = Pn.check(spec, canvas, keys=Pn.PANEL_KEYS, title=a.title, active=not a.inactive)
     if problems:
         print("REFUSED: the rendered panel disagrees with its own layout in %d place(s)" % len(problems))
         for x, y, role, found in problems[:8]:
@@ -336,11 +349,13 @@ def cmd_panel(a):
         if len(problems) > 8:
             print("  ... and %d more" % (len(problems) - 8))
         return 2
-    im = Pn.render(spec, a.width, a.height, keys=Pn.PANEL_KEYS, palette=Pn.PANEL_PALETTE,
-                   title=a.title, scale=a.scale)
+    im = Pn.render(spec, width, height, keys=Pn.PANEL_KEYS, palette=Pn.PANEL_PALETTE,
+                   title=a.title, scale=a.scale, active=not a.inactive)
     im.save(a.out)
-    print("%s  %dx%d logical, written at %dx%d" % (Path(a.out).name, a.width, a.height, im.width, im.height))
-    print("  %d pixel(s) checked, 0 disagreed with the layout" % (a.width * a.height))
+    print("%s  %s tier %dx%d, written at %dx%d, %s"
+          % (Path(a.out).name, a.tier, width, height, im.width, im.height,
+             "inactive" if a.inactive else "active"))
+    print("  %d pixel(s) checked, 0 disagreed with the layout" % (width * height))
     return 0
 
 
@@ -691,8 +706,12 @@ def main(argv=None):
 
     pn = sub.add_parser("panel", help="draw a panel and verify it against its own layout")
     pn.add_argument("out", help="where to write the PNG")
-    pn.add_argument("--width", type=int, default=96)
-    pn.add_argument("--height", type=int, default=40)
+    pn.add_argument("--tier", choices=tuple(PANEL_TIERS), default="normal",
+                   help="a size tier: one layout at several sizes (default normal)")
+    pn.add_argument("--width", type=int, default=None, help="override the tier's width")
+    pn.add_argument("--height", type=int, default=None, help="override the tier's height")
+    pn.add_argument("--inactive", action="store_true",
+                    help="draw the inactive title bar; the state is a role, so the check verifies it")
     pn.add_argument("--title")
     pn.add_argument("--scale", type=int, default=1,
                     help="integer upscale; 1 writes at one pixel per pixel")
