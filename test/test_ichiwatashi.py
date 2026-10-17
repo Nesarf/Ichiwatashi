@@ -54,6 +54,7 @@ from ichiwatashi import figures as FIG
 from ichiwatashi import keys as KEYS
 from ichiwatashi import panel as PANEL
 from ichiwatashi import terminal as TERM
+from ichiwatashi import window as WIN
 
 
 def coords_note(r):
@@ -1257,6 +1258,50 @@ class TestTerminalRendering(unittest.TestCase):
         band = "".join(lines[where["title"][1] + 1:where["title"][3]])
         self.assertIn("#", band)
 
+    def test_the_close_mark_is_drawn_and_counted(self):
+        """**The system's title bar is not used, so this is the only close button there is.**"""
+        spec, w, h = PANEL.tier("normal")
+        where = PANEL.layout(spec, w, h)
+        cv = PANEL.draw(spec, w, h, keys=PANEL.PANEL_KEYS, title="Ichi")
+        marks = sum(1 for y in range(h) for x in range(w)
+                    if cv.get(x, y) == PANEL.PANEL_KEYS["close_mark"])
+        self.assertEqual(marks, len(where["_close_px"]))
+        self.assertGreater(marks, 0, "an undecorated window with no close mark cannot be closed")
+        # and the mark really is the X shape: its pixels are not a filled block
+        rect = where["close"]
+        area = (rect[2] - rect[0]) * (rect[3] - rect[1])
+        self.assertLess(marks, area, "an X is not a filled square: %d of %d" % (marks, area))
+
+    def test_the_mark_can_be_turned_off(self):
+        spec = PANEL.PanelSpec(close=False)
+        where = PANEL.layout(spec, 96, 40)
+        self.assertIsNone(where["close"])
+        self.assertEqual(where["_close_px"], set())
+
+    def test_the_title_never_runs_under_the_close_mark(self):
+        """**The mark takes room from the title, not the other way round.**
+
+        Measured before the fix: the title's available width ran to the frame's inner edge, so a title that fit
+        could run underneath the mark -- and the check would still pass, because the mark's pixels are
+        asserted separately. **The collision would have been invisible in the one place it matters.**
+        """
+        spec, w, h = PANEL.tier("normal")
+        where = PANEL.layout(spec, w, h)
+        start, room = PANEL.title_room(spec, where)
+        self.assertEqual(start + room, where["close"][0],
+                         "the room ends where the mark begins")
+        # a title exactly filling the room is accepted, and one pixel more is not
+        from ichiwatashi import figures as _FIG
+        exact = room // 6
+        PANEL.draw(spec, w, h, keys=PANEL.PANEL_KEYS, title="x" * exact)
+        with self.assertRaises(ValueError):
+            PANEL.draw(spec, w, h, keys=PANEL.PANEL_KEYS, title="x" * (exact + 2))
+
+    def test_the_text_version_shows_the_mark_too(self):
+        spec, w, h = PANEL.tier("normal")
+        lines = TERM.rows(spec, w, h, title="Ichi")
+        self.assertIn(TERM.CHARS["close_mark"], "".join(lines))
+
     def test_a_title_that_does_not_fit_is_refused(self):
         spec, w, h = PANEL.tier("compact")
         with self.assertRaises(ValueError) as ctx:
@@ -1299,6 +1344,34 @@ class TestTerminalRendering(unittest.TestCase):
         self.assertEqual(rc, 2)
         self.assertIn("not an action", buf.getvalue())
 
+    @unittest.skipUnless(os.environ.get("ICHIWATASHI_WINDOW_TEST"),
+                         "opening a window blocks in mainloop and needs a display; set "
+                         "ICHIWATASHI_WINDOW_TEST=1 to run it")
+    def test_the_cli_refuses_a_window_gracefully_when_it_cannot_open_one(self):
+        """**Not run by default, and that is a correction.**
+
+        The first version called `main([... "--window"])` unconditionally. On this machine a display exists,
+        so the window really opened and the suite **blocked forever in `mainloop()`** -- measured: ten minutes
+        with no end. **A test that can hang is worse than no test**, because it takes the whole suite with it
+        and looks like a slow run rather than a stuck one.
+
+        What is worth asserting is available without a window: `open_window` refuses a fractional scale before
+        any toolkit is touched, and `tk_key` is a pure function. Both are tested above. This one is kept behind
+        an environment variable for the case where someone actually wants to open one.
+        """
+        import contextlib
+        import io as _io
+        from ichiwatashi.cli import main
+        buf = _io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = main(["panel", "--tier", "compact", "--window"])
+        out = buf.getvalue()
+        if rc == 2:
+            self.assertIn("could not open a window", out)
+            self.assertIn("--text", out, "the alternative has to be offered")
+        else:
+            self.assertEqual(rc, 0)
+
     def test_the_cli_wants_a_destination_or_the_text_flag(self):
         import contextlib
         import io as _io
@@ -1308,6 +1381,47 @@ class TestTerminalRendering(unittest.TestCase):
             rc = main(["panel"])
         self.assertEqual(rc, 2)
         self.assertIn("--text", buf.getvalue(), "the way out has to be stated")
+
+    def test_a_toolkit_key_event_becomes_this_package_s_key_name(self):
+        """**The only toolkit-specific logic, and it is a pure function** -- which is why it is testable
+        without a display, while the window itself is not.
+
+        `keysym` first because it names the key ("Tab", "Up"); `char` second because for a letter that is what
+        was typed. Binding on keysym alone loses the arrow keys; on char alone it loses Tab and Return.
+        """
+        cases = [("Tab", None, "tab"), ("ISO_Left_Tab", None, "shift+tab"), ("Return", None, "enter"),
+                 ("Escape", None, "esc"), ("Up", None, "up"), ("Down", None, "down"),
+                 ("space", " ", "space"), ("q", "q", "char:q"), ("Q", "Q", "char:q")]
+        for keysym, char, want in cases:
+            self.assertEqual(WIN.tk_key(keysym, char), want, "keysym %r char %r" % (keysym, char))
+
+    def test_an_unknown_key_carries_no_action(self):
+        """**`None`, not a guessed character.** Turning an unknown keysym into a character would make F5
+        press the letter f five times."""
+        for keysym in ("F5", "Control_L", "Alt_R", "Prior"):
+            self.assertIsNone(WIN.tk_key(keysym), "%r must not become a key" % (keysym,))
+
+    def test_the_whole_chain_from_a_toolkit_event_to_an_effect(self):
+        """A toolkit event, through the key model, to what the window does -- all without a display."""
+        f = KEYS.Focus(3)
+        transcript = []
+        for keysym, char in (("Tab", None), ("Tab", None), ("Return", None), ("q", "q")):
+            key = WIN.tk_key(keysym, char)
+            action = KEYS.action_for(key) if key else None
+            transcript.append((keysym, key, action, f.apply(action) if action else "ignored"))
+        self.assertEqual(transcript, [
+            ("Tab", "tab", "focus_next", "moved"),
+            ("Tab", "tab", "focus_next", "moved"),
+            ("Return", "enter", "activate", "activated"),
+            ("q", "char:q", "quit", "left"),
+        ])
+
+    def test_the_window_refuses_a_fractional_scale(self):
+        """The check happens before any toolkit is touched, so it can be asserted here."""
+        spec, w, h = PANEL.tier("compact")
+        for bad in (0, -1, 1.5, "2", None):
+            with self.assertRaises(ValueError):
+                WIN.open_window(spec, w, h, title="x", scale=bad)
 
     def test_a_whole_frame_includes_the_status_line(self):
         spec, w, h = PANEL.tier("compact")

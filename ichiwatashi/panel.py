@@ -34,7 +34,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 __all__ = ["PanelSpec", "PANEL_ROLES", "PANEL_KEYS", "PANEL_PALETTE", "TIERS", "tier",
-           "layout", "draw", "render", "check"]
+           "layout", "draw", "render", "check", "title_room", "close_pixels"]
 
 
 #: Which job each colour does in a panel. **Named rather than positional**, because the whole reason the
@@ -42,13 +42,14 @@ __all__ = ["PanelSpec", "PANEL_ROLES", "PANEL_KEYS", "PANEL_PALETTE", "TIERS", "
 #: **A panel becomes a window when its title bar can show whether it is the active one.** Two title roles
 #: rather than a tint applied at render time, because the difference has to be a *role* for `check` to verify
 #: it -- a tint would be a rendering detail that no test could see.
-PANEL_ROLES = ("frame_dark", "frame_light", "title", "title_inactive", "title_text", "well", "content")
+PANEL_ROLES = ("frame_dark", "frame_light", "title", "title_inactive", "title_text",
+               "close_mark", "well", "content")
 
 #: One key per role. **Unique even where two roles share a colour**, because `check` compares keys: a shared
 #: key would let a pixel in the title bar satisfy the frame's expectation, and the check would pass on a panel
 #: with its parts in the wrong places.
 PANEL_KEYS = {"frame_dark": "fd", "frame_light": "fl", "title": "ta", "title_inactive": "ti",
-              "title_text": "tx", "well": "wl", "content": "ct"}
+              "title_text": "tx", "close_mark": "cm", "well": "wl", "content": "ct"}
 
 #: The size tiers, as `(width, height)` in logical pixels. **One layout at three sizes, not three layouts** --
 #: which is only true if every tier passes the same check, and a test asserts that. The narrowest tier is sized
@@ -77,6 +78,7 @@ PANEL_PALETTE = {
     "ta": (52, 44, 72, 255),      # title bar, active
     "ti": (30, 27, 40, 255),      # title bar, inactive -- darker and desaturated, the usual cue
     "tx": (232, 228, 244, 255),   # title text
+    "cm": (208, 72, 88, 255),     # the close mark: red, so it reads as the one destructive control
     "wl": (36, 32, 48, 255),      # the well's floor
     "ct": (60, 52, 84, 255),      # content area
 }
@@ -94,6 +96,7 @@ class PanelSpec:
     title_h: int = 9      # holds a 5x7 glyph plus one pixel above and below
     pad: int = 2          # gap between the frame and the well
     bevel: bool = True    # lit on the top and left of the frame, shaded on the bottom and right
+    close: bool = True    # a mark at the right end of the title bar, because the system's is not used
 
     def __post_init__(self):
         if self.border < 1:
@@ -117,13 +120,30 @@ def layout(spec, width, height):
         raise ValueError("height %d cannot hold border %d, a title of %d and content"
                          % (height, spec.border, spec.title_h))
     b = spec.border
-    return {
+    title = (b, b, width - b, b + spec.title_h)
+    # **the close mark sits at the right end of the title bar and is sized from it**, so a taller bar gets a
+    # proportionally larger mark rather than a gap. Square, because a mark that changes shape with the bar's
+    # height would need its own layout rules.
+    side = min(spec.title_h, 7)
+    close = None
+    if spec.close:
+        cx1 = title[2]
+        cx0 = cx1 - side
+        # centred vertically in the bar
+        cy0 = title[1] + (spec.title_h - side) // 2
+        close = (cx0, cy0, cx1, cy0 + side)
+    where = {
         "frame": (0, 0, width, height),
-        "title": (b, b, width - b, b + spec.title_h),
+        "title": title,
+        "close": close,
         "well": (b, b + spec.title_h, width - b, height - b),
         "content": (b + spec.pad, b + spec.title_h + spec.pad,
                     width - b - spec.pad, height - b - spec.pad),
     }
+    # **computed once here and carried in the layout**, because `_role_at` runs per pixel and would otherwise
+    # rebuild the mark's shape for every one of them
+    where["_close_px"] = close_pixels(spec, where)
+    return where
 
 
 def _role_at(spec, where, x, y, *, active=True):
@@ -156,6 +176,8 @@ def _role_at(spec, where, x, y, *, active=True):
             if (y - 0) == 1 or (x - 0) == 1:
                 return "frame_light"
             return "frame_dark"
+    if (x, y) in where.get("_close_px", ()):
+        return "close_mark"
     if inside(where["content"]):
         return "content"
     if inside(where["title"]):
@@ -165,6 +187,59 @@ def _role_at(spec, where, x, y, *, active=True):
     if inside(where["well"]):
         return "well"
     return "frame_dark"
+
+
+def title_room(spec, where):
+    """`(start_x, available_width)` for the title. **One definition**, because three places need it.
+
+    **The mark takes room from the title, not the other way round.** Measured: without this the title's
+    available width ran to the frame's inner edge and a title that fit could run underneath the close mark --
+    the check would still pass, because the mark's own pixels are asserted separately, so the collision would
+    be invisible in the one place it matters.
+    """
+    tx0, _ty0, tx1, _ty1 = where["title"]
+    cx0, _cy0, _cx1, _cy1 = where["content"]
+    start = max(tx0 + spec.pad, cx0)
+    right = where["close"][0] if where.get("close") else tx1
+    return start, max(0, right - start)
+
+
+def close_pixels(spec, where):
+    """The pixels the close mark occupies, as a set. **One definition**, used by `draw` and by `check`.
+
+    The mark is the `X` glyph from the same 5x7 table every other glyph comes from, centred in the square
+    `layout` reserved for it. **Centred rather than stretched**: a mark scaled to fill an arbitrary square
+    would change shape with the title bar's height, and a shape that changes with a measurement is one more
+    thing that can be wrong without being visible.
+
+    Returns an empty set when the spec has no close mark.
+    """
+    from . import font as FONT
+
+    rect = where.get("close")
+    if not rect:
+        return set()
+    x0, y0, x1, y1 = rect
+    side = x1 - x0
+    rows = _X_ROWS(side)
+    # centre the glyph: a 5-wide mark in a 7-wide square starts at column 1
+    off_x = (side - len(rows[0])) // 2 if rows else 0
+    off_y = (side - len(rows)) // 2 if rows else 0
+    out = set()
+    for dy, row in enumerate(rows):
+        for dx, ch in enumerate(row):
+            if ch != " ":
+                out.add((x0 + off_x + dx, y0 + off_y + dy))
+    return out
+
+
+def _X_ROWS(side):
+    """A five-wide `X` when there is room, a three-wide one when there is not."""
+    if side >= 5:
+        return ["#   #", " # # ", "  #  ", " # # ", "#   #"]
+    if side >= 3:
+        return ["# #", " # ", "# #"]
+    return ["#"]
 
 
 def draw(spec, width, height, *, keys, title=None, body=None, glyphs=None, active=True):
@@ -201,17 +276,17 @@ def draw(spec, width, height, *, keys, title=None, body=None, glyphs=None, activ
                 if px < cx1 and py < cy1:
                     cv.put(px, py, keys[role])
     if title:
-        tx0, ty0, tx1, _ty1 = where["title"]
-        start = max(tx0 + spec.pad, cx0)
+        ty0 = where["title"][1]
+        start, room = title_room(spec, where)
         # **A title that does not fit is refused, not clipped.** Measured: a 64-pixel panel with the default
-        # spec has `tx1 - start == 58`, and "Ichiwatashi" is 66 pixels wide at 6 per character -- so the first
-        # version drew "Ichi wa.ta.sk", a word that is not the one the caller passed. A panel title that
-        # silently becomes a different word is the same failure as a figure whose label ran off its canvas:
-        # the image still saved, and nothing said so.
+        # spec has 58 pixels of room, and "Ichiwatashi" is 66 wide at 6 per character -- so the first version
+        # drew "Ichi wa.ta.sk", a word that is not the one the caller passed. A panel title that silently
+        # becomes a different word is the same failure as a figure whose label ran off its canvas: the image
+        # still saved, and nothing said so.
         need = FIG.text_width(title)
-        if start + need > tx1:
+        if need > room:
             raise ValueError("title %r needs %d px but the title bar has %d; widen the panel or shorten the "
-                             "title" % (title, need, tx1 - start))
+                             "title" % (title, need, room))
         FIG.draw_text(cv, start, ty0 + 1, title, keys["title_text"], glyphs=glyphs)
     return cv
 
@@ -253,13 +328,11 @@ def check(spec, canvas, *, keys, title=None, active=True):
     where = layout(spec, canvas.width, canvas.height)
     skip = None
     if title:
-        tx0, _ty0, tx1, _ty1 = where["title"]
-        cx0, _cy0, _cx1, _cy1 = where["content"]
-        start = max(tx0 + spec.pad, cx0)
-        if start + FIG.text_width(title) > tx1:
+        start, room = title_room(spec, where)
+        if FIG.text_width(title) > room:
             # a reported problem with no pixel coordinates: it is about the layout, not about a pixel
             return [(-1, -1, "title_fits", "%r is %d px, %d available"
-                     % (title, FIG.text_width(title), tx1 - start))]
+                     % (title, FIG.text_width(title), room))]
         tx0, ty0, _tx1, _ty1 = where["title"]
         cx0, _cy0, _cx1, _cy1 = where["content"]
         start = max(tx0 + spec.pad, cx0)

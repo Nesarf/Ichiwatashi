@@ -365,6 +365,20 @@ def cmd_panel(a):
                 return 2
             print("    %-12s -> %-10s index=%d" % (name, effect, focus.index))
         print()
+    if a.window:
+        # **A window needs a display, and there is no way to fake one.** So the failure is caught and named
+        # rather than allowed to surface as a Tcl traceback -- a caller on a headless machine should be told
+        # what is missing, not handed a stack.
+        from . import window as W
+
+        try:
+            W.open_window(spec, width, height, title=a.title, controls=a.controls,
+                          scale=max(1, a.scale), hint=a.hint)
+        except Exception as exc:
+            print("REFUSED: could not open a window: %s" % exc)
+            print("  pass --text to print the same panel instead")
+            return 2
+        return 0
     if a.text:
         for line in TERM.frame(spec, width, height, title=a.title, active=not a.inactive,
                                focus=focus if a.controls else None, hint=a.hint):
@@ -730,6 +744,9 @@ def main(argv=None):
 
     pn = sub.add_parser("panel", help="draw a panel and verify it against its own layout")
     pn.add_argument("out", nargs="?", help="where to write the PNG; omit with --text")
+    pn.add_argument("--window", action="store_true",
+                    help="open a real window (needs tkinter and a display); refuses rather than crashing "
+                         "when either is missing")
     pn.add_argument("--text", action="store_true",
                     help="print the window as text (one character per logical pixel) instead of writing a PNG")
     pn.add_argument("--controls", type=int, default=0,

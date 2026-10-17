@@ -172,6 +172,18 @@ t-compact.png  compact tier 72x30, written at 216x90, active
   2160 pixel(s) checked, 0 disagreed with the layout
 ```
 
+### The window draws its own frame, including the close button
+
+**The system's title bar is not used**, because an undecorated pixel-art window is the requirement and a
+system-drawn bar is neither pixel art nor ours. `root.overrideredirect(True)` removes the chrome, and the two
+things the system was providing are reimplemented from `panel.layout`:
+
+- **Dragging** — the title bar's rectangle is the hit area, so a window at any tier drags from its own bar.
+- **Closing** — the panel draws a 5x7 red `X` at the right end of its bar, and clicking it closes the window.
+  **The title's available width is reduced by the mark** (`panel.title_room` is the one definition of that
+  sentence); without it a title that fits can run underneath the mark while the check still passes, because
+  the mark's pixels are asserted separately — **an invisible collision in the one place it matters.**
+
 ### Input: a model, not a toolkit
 
 "A keyboard-operable window" sounds like a GUI problem and is mostly not one. What a window *does* with a key —
