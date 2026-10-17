@@ -11,6 +11,10 @@ import sys
 from pathlib import Path
 
 from . import calibration as C
+
+#: The font source that ships with the package. One definition, resolved from this module, because
+#: `figures.FONT_PATH` used to be a bare relative string and broke whenever the cwd was not the repo.
+FONT_SOURCE = Path(__file__).resolve().parent / "assets" / "font5x7.txt"
 from .judge import outline_style
 from .scope import MIN_SHORT_SIDE as SCOPE_MIN
 
@@ -561,8 +565,11 @@ def main(argv=None):
     ug.set_defaults(func=cmd_ungrid)
 
     ft = sub.add_parser("font", help="emit the shared 5x7 bitmap font for another tool to embed")
-    ft.add_argument("--source", default=str(Path(__file__).resolve().parents[1] / "assets" / "font5x7.txt"),
-                    help="the font source; defaults to this repository's own copy")
+    # **`parent`, not `parents[1]`.** The source moved from `<repo>/assets/` to `<package>/assets/` so that
+    # it ships in the wheel -- it did not, and an installed copy could not find its own font. Resolving from
+    # the module rather than the repository also stops the default from depending on the current directory.
+    ft.add_argument("--source", default=str(FONT_SOURCE),
+                    help="the font source; defaults to the copy inside the package")
     ft.add_argument("--format", choices=("powershell", "hex", "text"), default="powershell",
                     help="powershell: the hashtable body volcano-separator reads. hex: char<TAB>hex. "
                          "text: each glyph drawn as # and . so it can be read or diffed.")

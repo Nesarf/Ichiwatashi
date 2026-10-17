@@ -284,9 +284,31 @@
 
 ### 工程
 
-- [ ] **没有发布流程**（同族的 Nanodesu / Torikago 都有 RELEASE_NOTES + Trusted Publishing）。
-      **而 CI 是有的**：`.github/workflows/ci.yml` 跑三系统乘三 Python 的测试，外加一个 CLI 冒烟，**所以缺的只是「怎么把它发布出去」那一半**，不是从零开始。
-      等第一次要发 PyPI 时再补 —— **不提前**（这条是既定口径，不是缺口）。
+- [x] **发布流程做出来了 —— 而做的过程里抓到「发布出去的东西是残的」。**
+      `.github/workflows/release.yml`（照同族形状）+ `RELEASE_NOTES_0.1.0.md` + 五个打包测试。
+
+      **而最要紧的不是 workflow 本身，是它包住的三条检查**：其一，**tag 与 `pyproject.toml` 的版本必须相等**；
+      其二，**版本在本仓库声明两处**（`pyproject.toml` 与 `ichiwatashi.__version__`），**两处必须一致** ——
+      否则 wheel 的元数据说 0.1.0 而运行时说别的，谁也没法钉版本；
+      其三，**wheel 必须含 `ichiwatashi/assets/font5x7.txt`**。
+
+      **而第三条是被实测抓出来的，不是预防性的**：**第一版 wheel 有十一个 `.py` 而没有 `assets/`**，
+      所以 `pip install` 之后 `ichiwatashi font` 找不到自己的字体 —— **而 build、`twine check`、install 全都报告成功。**
+      那与同族那个「漏了主功能背后的模块」是同一种缺陷。修法是把 `assets/` 移进包里（`git mv` 保住历史）
+      并加 `[tool.setuptools.package-data]`。
+
+      **而顺带修了第二个**：`figures.FONT_PATH` 原本是**裸相对路径** `"assets/font5x7.txt"` ——
+      只在 cwd 恰好是仓库根时成立。**而所有测试都在仓库根跑，所以它从没在那里失败过**，
+      而从别的目录画一张图就会 `FileNotFoundError`。现在改成模块相对，并留了一条**切换 cwd 再解析**的测试。
+
+      **而 workflow 里那几段内联脚本是真跑过的**：抽成脚本在真 shell 里执行，含一段**必须失败**的自检
+      （向 wheel 里要一个不存在的文件，若它「通过」就说明检查器没在检查）。
+
+      **而端到端验收也做了**：干净 venv 装那个 wheel，**从一个不是仓库的目录**跑
+      `ichiwatashi font --check` —— 88 个字形全过、退出码 0。
+
+      **而「等第一次要发 PyPI 时再补」那条口径现在作废** —— 已经补了，而补的过程证明它不只是「流程」：
+      它抓出了一个真正会发出去的残件。
 
 ### 语料（corpus）
 

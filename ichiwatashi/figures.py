@@ -22,13 +22,18 @@ one that shows it is missing.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from . import builder as B
 from .font import FONT_H, FONT_W, load_source
 
 __all__ = ["draw_text", "text_width", "palette_board", "outline_study", "silhouette_map",
            "distribution_bars", "source_distribution", "render", "FONT_PATH", "DEFAULT_PALETTE"]
 
-FONT_PATH = "assets/font5x7.txt"
+#: **Module-relative, not a bare string.** The first version was `"assets/font5x7.txt"`, which only
+#: resolved when the process happened to be running from the repository root -- every test did, so it
+#: never failed there, and a figure drawn from another directory would have raised FileNotFoundError.
+FONT_PATH = str(Path(__file__).resolve().parent / "assets" / "font5x7.txt")
 
 #: The figure palette. Deliberately few colours, and chosen so a figure cannot be mistaken for the
 #: artwork it describes: a report figure is a diagram, and `corpus/AESTHETICS.md` records that real

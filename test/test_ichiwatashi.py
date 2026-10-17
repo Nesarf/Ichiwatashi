@@ -12,6 +12,7 @@ import itertools
 import json
 import math
 import os
+import shutil
 import tempfile
 import unittest
 
@@ -904,6 +905,78 @@ class TestPaletteRoles(unittest.TestCase):
         self.assertEqual(only_fill[(200, 120, 160)], "fill")
 
 
+class TestPackaging(unittest.TestCase):
+    """The things a release needs, asserted before a tag exists rather than after PyPI has the file.
+
+    **This class exists because the first wheel built here was incomplete.** It contained eleven `.py` files
+    and no `assets/`, so an installed copy could not find the font its own `font` command defaults to -- while
+    the build, the metadata check and the install all reported success. The sibling project shipped once
+    without the module behind its main flag for exactly the same reason. A build that succeeds says nothing
+    about its contents.
+    """
+
+    def test_the_font_source_ships_inside_the_package(self):
+        """It has to be inside `ichiwatashi/`, not beside it, or `package-data` cannot reach it."""
+        src = Path(__file__).resolve().parents[1] / "ichiwatashi" / "assets" / "font5x7.txt"
+        self.assertTrue(src.is_file(), "the font source is missing from the package: %s" % src)
+        # **Counted with the parser, not by counting lines.** The file is 119 lines and 88 glyphs: it carries
+        # comments and blank lines, and `\n`-splitting it counts 119 -- which is what the first version of this
+        # assertion did, and it failed on a file that was completely correct.
+        from ichiwatashi import font as FONT
+        glyphs = FONT.parse_source(src.read_text(encoding="utf-8"))
+        self.assertEqual(len(glyphs), 88, "the font table should hold 88 glyphs")
+        self.assertIn(" ", glyphs, "the space glyph is part of the set")
+        for ch, glyph in glyphs.items():
+            self.assertEqual(len(glyph.rows), 7, "%r does not have 7 rows" % ch)
+            for row in glyph.rows:
+                self.assertTrue(0 <= row < 128, "%r row %d is not a 5-bit value" % (ch, row))
+
+    def test_pyproject_declares_the_package_data(self):
+        """Without this line the wheel is built and is missing the font."""
+        pyproject = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(encoding="utf-8")
+        self.assertIn("[tool.setuptools.package-data]", pyproject)
+        self.assertIn("assets/*.txt", pyproject)
+
+    def test_the_version_is_declared_once_and_agrees_in_both_places(self):
+        """`pyproject.toml` and `ichiwatashi.__version__` both exist, so they can disagree.
+
+        The release workflow checks this too; asserting it here means the failure arrives while editing rather
+        than at the last step of a release.
+        """
+        import tomllib
+        root = Path(__file__).resolve().parents[1]
+        declared = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
+        import ichiwatashi as I
+        self.assertEqual(declared, I.__version__,
+                         "pyproject.toml says %r but ichiwatashi.__version__ says %r"
+                         % (declared, I.__version__))
+
+    def test_the_cli_font_default_is_absolute_and_inside_the_package(self):
+        """A default relative to the current directory passes in the checkout and fails for every user."""
+        from ichiwatashi.cli import FONT_SOURCE
+        self.assertTrue(Path(FONT_SOURCE).is_absolute(), "%s is not absolute" % FONT_SOURCE)
+        self.assertTrue(Path(FONT_SOURCE).is_file(), "%s does not exist" % FONT_SOURCE)
+        self.assertEqual(Path(FONT_SOURCE).parent.parent.name, "ichiwatashi",
+                         "%s is not inside the package" % FONT_SOURCE)
+
+    def test_figures_font_path_resolves_from_any_directory(self):
+        """`figures.FONT_PATH` used to be the bare string "assets/font5x7.txt"."""
+        from ichiwatashi import figures as FIG
+        self.assertTrue(Path(FIG.FONT_PATH).is_absolute(), "FONT_PATH is still relative: %r" % FIG.FONT_PATH)
+        old = os.getcwd()
+        d = tempfile.mkdtemp()
+        try:
+            os.chdir(d)
+            self.assertTrue(Path(FIG.FONT_PATH).is_file(),
+                            "FONT_PATH does not resolve from an unrelated cwd")
+        finally:
+            # **step out before removing it**: on Windows a directory cannot be deleted while it is the
+            # current working directory, and a `TemporaryDirectory` context manager therefore raises
+            # PermissionError from its own cleanup while the assertion above passed.
+            os.chdir(old)
+            shutil.rmtree(d, ignore_errors=True)
+
+
 class TestBuilder(unittest.TestCase):
 
     def test_shapes_and_outline(self):
@@ -1096,7 +1169,7 @@ class TestFont(unittest.TestCase):
     use. `tools/probe_font_from_ichiwatashi.py` does that comparison; these tests cover the pieces.
     """
 
-    SRC = Path(__file__).resolve().parents[1] / "assets" / "font5x7.txt"
+    SRC = Path(__file__).resolve().parents[1] / "ichiwatashi" / "assets" / "font5x7.txt"
 
     def test_the_source_parses_and_every_glyph_is_5x7(self):
         from ichiwatashi.font import load_source

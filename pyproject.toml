@@ -24,3 +24,10 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 packages = ["ichiwatashi"]
+
+# **The font source has to ship, and it did not.** A wheel built before this line existed contained eleven
+# `.py` files and no `assets/`, so an installed copy could not find the font its own `font` command defaults
+# to -- the same shape as the sibling project that once released without the module behind its main flag,
+# where the build, the metadata check and the install all reported success.
+[tool.setuptools.package-data]
+ichiwatashi = ["assets/*.txt"]
