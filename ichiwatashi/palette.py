@@ -103,12 +103,26 @@ def sample(image, n: int = 20, *, metric: str = "ciede2000", merge_distance: flo
         def dist(a, b, _fn=fn):
             return _fn(a, b)
 
-    src = image.convert("RGB") if not hasattr(image, "convert") else image.convert("RGB")
+    # **Read RGBA from the caller's image, not from a converted copy.** The line here used to be
+    # `src = image.convert("RGB")`, which discards alpha before anything else can look at it -- so a later
+    # `convert("RGBA")` had nothing left to restore and every pixel came back opaque.
+    src = image if hasattr(image, "convert") else Image.open(image)
+    if src.mode != "RGBA":
+        src = src.convert("RGBA")
     if src.width * src.height > budget:
         step = int((src.width * src.height / budget) ** 0.5) + 1
         src = src.resize((max(1, src.width // step), max(1, src.height // step)), Image.NEAREST)
 
-    counts = src.getcolors(maxcolors=1 << 24) or []
+    # **The clear ground is not a colour.** Measured: a fixture drawn in three opaque colours on a
+    # transparent ground reported **four** -- the extra one being `#000000`, every transparent pixel's RGB
+    # -- and on a real 207x179 character sheet that black was the *most frequent* entry. A colour counted
+    # from a region nobody drew is exactly the kind of confident wrong answer this project keeps finding.
+    #
+    # `PIL`'s `getcolors` yields `(count, colour)`, and the order matters: unpacking the pair the other way
+    # round is what made an earlier attempt at this fix raise `TypeError: int object is not subscriptable`.
+    counts = [(n, c[:3]) for n, c in (src.getcolors(maxcolors=1 << 24) or []) if c[3] > 0]
+    if not counts:
+        return ()
     counts.sort(reverse=True)          # most frequent first, so each group's winner is modal
 
     groups = []

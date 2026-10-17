@@ -124,6 +124,31 @@ Two layout decisions were forced by reading the pixels back rather than by looki
   reference band with the shipped reference marked on it, which is the comparison `tools/calibrate.py`
   prints as text.
 
+## The clear ground is not a colour
+
+`palette.sample` merges near-duplicates first — a sampler that does not merge measures the encoder, not the
+art — and it counts **only opaque pixels**. A first version converted to RGB before counting, which turned
+every transparent pixel into `#000000`; on a real 207x179 sheet that black became the **most frequent entry**
+in the palette of a sprite that does not contain it.
+
+And the `palette` command names **which parameter limited the result**, in four cases rather than two, because
+"fewer than `--count`" has three different causes:
+
+```
+18 distinct colour(s) in the drawing
+merged to 4 within 24 per channel -- the threshold is what limited this, not --count 8
+  lower --merge to see more; 0 measures the encoder rather than the art
+```
+```
+all 18 colour(s) this drawing uses (--count 40 allows more; merging within 4 reduced none)
+```
+```
+4 colour(s) -- the first 4 of the merged set, capped by --count
+```
+
+The third case deliberately does **not** say what merging would have done: `--count 4 --merge 24` can return
+four colours for both reasons at once, and **naming the wrong cause is worse than naming none**.
+
 ## Palette roles
 
 `palette.roles(image)` says what job each colour does, and it judges that by **the relation a colour stands

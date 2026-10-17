@@ -110,7 +110,40 @@ def cmd_palette(a):
     cols = P.sample(im, a.count, merge_distance=a.merge)
     by_role = P.roles(im, cols)
     print("%s  %dx%d" % (Path(a.image).name, im.width, im.height))
-    print("  %d colour(s) after merging within %d per channel" % (len(cols), a.merge))
+    # **Three numbers, because one of them was being read as another.** `--count 8` on a 16-colour sprite
+    # printed "4 colour(s) after merging within 24", which reads as "this image has 4 colours" when it has
+    # 16 -- and the reader cannot tell whether `--count` or `--merge` produced the shortfall. Measured on a
+    # real sprite: 16 distinct colours, grouped to 4 by the threshold of 24, with `--count 8` never reached.
+    # Both parameters are honest; only saying which one bound the result makes it readable.
+    # **Opaque pixels only.** The first version converted to RGB, which folds the transparent ground's
+    # colour into the count: a 207x179 sheet with a clear background reported one colour more than it draws
+    # with, and that one is not a colour of the artwork. `sample()` also works in RGB, so the two numbers
+    # stay comparable; what changes is that the count does not include a region nobody drew.
+    raw = im.convert("RGBA").getcolors(maxcolors=1 << 24)
+    # `getcolors()` yields `(count, colour)`, not `(colour, count)` -- unpacking it the other way round
+    # is what made the first version of this line fail with `TypeError: int is not subscriptable`
+    n_distinct = len({c for _n, c in (raw or []) if c[3] > 0})
+    if n_distinct and n_distinct != len(cols):
+        print("  %d distinct colour(s) in the drawing" % n_distinct)
+    # **Four cases, because "fewer than --count" has three different causes.** Measured on one sprite:
+    # `--count 8` gave 4 (the threshold of 24 merged 18 colours into 4 groups), and `--count 40 --merge 4`
+    # gave 18 -- which a two-way test reported as "the threshold limited this", sending the reader to lower
+    # `--merge` when the drawing simply has 18 colours. Naming the wrong cause is worse than naming none.
+    if len(cols) == n_distinct:
+        # the drawing itself is the limit; neither parameter reduced anything
+        print("  all %d colour(s) this drawing uses (--count %d allows more; merging within %d reduced none)"
+              % (len(cols), a.count, a.merge))
+    elif len(cols) < a.count:
+        print("  merged to %d within %d per channel -- the threshold is what limited this, not --count %d"
+              % (len(cols), a.merge, a.count))
+        print("    lower --merge to see more; 0 measures the encoder rather than the art")
+    else:
+        # **No attribution here, deliberately.** `--count 4 --merge 24` returns 4 colours on this sprite
+        # because the threshold also produced 4 groups -- so "merging did not limit this" would be false
+        # whenever the two happen to coincide, and that is exactly when a reader would most want the truth.
+        # The cap is `--count`; whether merging would have given more is not stated because it is not known.
+        print("  %d colour(s) -- the first %d of the merged set, capped by --count"
+              % (len(cols), a.count))
     # **The role is printed beside each colour, because it answers a question the hex does not.** A reader
     # looking at sixteen hex values cannot tell which one is the outline; `roles` can, and it is judged by
     # the relation (how often a colour is on the outline side of a fill/outline pair) rather than by

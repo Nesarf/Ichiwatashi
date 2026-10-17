@@ -977,6 +977,144 @@ class TestPackaging(unittest.TestCase):
             shutil.rmtree(d, ignore_errors=True)
 
 
+class TestTheClearGroundIsNotAColour(unittest.TestCase):
+    """`sample()` was counting the transparent region as a colour, and on real art it ranked first.
+
+    **The bug underneath the `--count` report.** Investigating why `--count 8` printed 4 found that
+    `--merge 0` printed **4 when the fixture draws 3** -- the extra entry being `#000000`, every
+    transparent pixel's RGB, because `sample()` used `convert("RGB")`. On a real 207x179 character sheet
+    that black was the **most frequent** entry in the palette of a sprite that does not contain it.
+
+    A colour counted from a region nobody drew is the failure shape this project keeps meeting: not an
+    error, a confident wrong answer. And the first attempt at the fix converted an already-RGB copy back
+    to RGBA, which restored nothing -- the alpha had been discarded two lines earlier.
+    """
+
+    def test_a_transparent_ground_contributes_no_colours(self):
+        im = Image.new("RGBA", (32, 32), (0, 0, 0, 0))
+        px = im.load()
+        for i, c in enumerate([(200, 60, 60), (60, 120, 200), (240, 220, 90)]):
+            for y in range(4 + i * 4, 4 + i * 4 + 3):
+                for x in range(6, 26):
+                    px[x, y] = c + (255,)
+        got = P.sample(im, 20, merge_distance=0)
+        self.assertEqual(len(got), 3,
+                         "three opaque colours on a clear ground is three colours, not four: %r" % (got,))
+        self.assertNotIn((0, 0, 0), [tuple(c[:3]) for c in got],
+                         "the clear ground's RGB must not appear as a palette entry")
+
+    def test_a_fully_transparent_image_yields_nothing(self):
+        """No palette, rather than a palette of one invented black."""
+        self.assertEqual(P.sample(Image.new("RGBA", (16, 16), (0, 0, 0, 0)), 8), ())
+
+    def test_an_opaque_black_is_still_a_colour(self):
+        """The fix must not throw away real black along with the transparent kind."""
+        im = Image.new("RGBA", (16, 16), (0, 0, 0, 255))
+        got = P.sample(im, 8)
+        self.assertEqual([tuple(c[:3]) for c in got], [(0, 0, 0)],
+                         "an opaque black pixel is a colour and has to survive: %r" % (got,))
+
+    def test_the_alpha_channel_is_not_lost_before_the_filter(self):
+        """The specific mechanism: converting to RGB first leaves nothing for a later RGBA conversion."""
+        im = Image.new("RGBA", (24, 24), (0, 0, 0, 0))
+        px = im.load()
+        for y in range(8, 16):
+            for x in range(8, 16):
+                px[x, y] = (200, 60, 60, 255)
+        # one colour despite the image being mostly transparent
+        self.assertEqual(len(P.sample(im, 20, merge_distance=0)), 1)
+
+
+class TestPaletteCommandSaysWhoLimitedIt(unittest.TestCase):
+    """`palette` names which parameter produced the count, and it had been naming none.
+
+    **The report that started this**: `--count 8` on a 16-colour sprite printed "4 colour(s) after merging
+    within 24 per channel", which reads as "this image has 4 colours" when it has sixteen -- and the reader
+    could not tell whether `--count` or `--merge` produced the shortfall. Both parameters are honest; only
+    saying which one bound the result makes it readable.
+
+    **And the first fix was wrong twice.** A two-way test ("fewer than --count" means the threshold bound it)
+    reported `--count 40 --merge 4` as threshold-limited when the drawing simply has 18 colours -- naming the
+    wrong cause, which is worse than naming none. Then the cap case said "merging did not limit this", which
+    is false whenever the threshold happens to produce the same count as the cap. Four cases, and the cap
+    case states only what is known.
+    """
+
+    def _sprite(self, colours, transparent_bg=True):
+        # the canvas has to hold `4 * len(colours)` rows of bands, so it grows with the fixture -- an
+        # earlier 24-row canvas raised IndexError on the six-colour case
+        h = max(24, 4 * len(colours) + 4)
+        im = Image.new("RGBA", (24, h), (0, 0, 0, 0) if transparent_bg else (255, 255, 255, 255))
+        px = im.load()
+        # **bands must not overlap.** The first version used `range(4 + i, 8 + i)`, so band i+1 overwrote
+        # most of band i and the fixture ended up drawing one colour while the test expected three.
+        for i, c in enumerate(colours):
+            for y in range(2 + i * 4, 2 + i * 4 + 3):
+                for x in range(4, 20):
+                    px[x, y] = tuple(c) + (255,)
+        return im
+
+    def _run(self, im, *args):
+        import contextlib
+        import io as _io
+        from ichiwatashi.cli import main
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "s.png"
+            im.save(p)
+            buf = _io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc = main(["palette", str(p)] + list(args))
+        return rc, buf.getvalue()
+
+    def test_distinct_colours_are_counted_from_opaque_pixels_only(self):
+        """A transparent ground is not a colour of the artwork.
+
+        The first version converted to RGB before counting, which folded the clear background's colour into
+        the total -- one colour more than the drawing uses, and that one is not in the drawing.
+        """
+        im = self._sprite([(200, 60, 60), (60, 120, 200), (240, 220, 90)])
+        _rc, out = self._run(im, "--count", "20", "--merge", "0")
+        self.assertIn("3 colour(s) this drawing uses", out,
+                      "three opaque colours and a clear ground should read as three: %r" % out)
+
+    def test_the_threshold_is_named_when_it_is_what_limited(self):
+        im = self._sprite([(200, 60, 60), (201, 61, 61), (60, 120, 200), (61, 121, 201),
+                           (240, 220, 90), (241, 221, 91)])
+        _rc, out = self._run(im, "--count", "6", "--merge", "24")
+        self.assertIn("the threshold is what limited this", out,
+                      "near-duplicates merged under a wide threshold must be named as the cause: %r" % out)
+        self.assertIn("lower --merge", out, "and the way out has to be offered")
+
+    def test_the_drawing_itself_is_named_when_it_is_the_limit(self):
+        """The case the two-way version mis-attributed."""
+        im = self._sprite([(200, 60, 60), (60, 120, 200), (240, 220, 90)])
+        _rc, out = self._run(im, "--count", "40", "--merge", "4")
+        self.assertIn("this drawing uses", out,
+                      "when nothing was merged away and the cap was not reached, the drawing is the limit: %r"
+                      % out)
+        self.assertNotIn("threshold is what limited", out,
+                         "naming the threshold here would send the reader to change the wrong flag")
+
+    def test_the_cap_is_named_without_claiming_what_merging_would_have_done(self):
+        """`--count 4 --merge 24` can return 4 because of the cap *and* because of the threshold.
+
+        So the cap case does not say "merging did not limit this" -- that sentence is false whenever the two
+        coincide, which is exactly when a reader would want the truth.
+        """
+        im = self._sprite([(200, 60, 60), (201, 61, 61), (60, 120, 200), (240, 220, 90)])
+        _rc, out = self._run(im, "--count", "2", "--merge", "24")
+        self.assertIn("capped by --count", out)
+        self.assertNotIn("did not limit this", out,
+                         "the old sentence claimed something the command does not know: %r" % out)
+
+    def test_the_report_names_the_sprite_it_used(self):
+        """A count with no attribution is what the entry was about; the blocks still have roles beside them."""
+        im = self._sprite([(200, 60, 60), (60, 120, 200), (240, 220, 90)])
+        _rc, out = self._run(im, "--count", "20", "--merge", "0")
+        self.assertIn("#", out, "the hex values are still printed")
+        self.assertIn("fill", out, "and so are the roles")
+
+
 class TestShiftExactness(unittest.TestCase):
     """`exact` is what tells a translation from a lookalike, and it does not depend on the window.
 
