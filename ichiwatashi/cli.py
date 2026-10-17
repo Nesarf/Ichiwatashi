@@ -365,6 +365,43 @@ def cmd_panel(a):
                 return 2
             print("    %-12s -> %-10s index=%d" % (name, effect, focus.index))
         print()
+    if a.export:
+        # **The portable form is what a tool in another language reads.** Volcano Separator is PowerShell and
+        # Node, so "embed" cannot be an import; the file carries its own checksum so a reader can tell "this
+        # file" from "a file with this name".
+        from . import portable as Pt
+        import json as _json
+
+        body = Pt.export(a.tier, spec=spec, title=a.title, active=not a.inactive,
+                         width=width, height=height)
+        with open(a.export, "w", encoding="utf-8") as fh:
+            fh.write(_json.dumps(body, ensure_ascii=False, indent=1, sort_keys=True))
+        print("%s  panel exported: %s tier %dx%d, %d role(s), checksum %s"
+              % (Path(a.export).name, body["tier"], width, height, len(body["roles"]),
+                 body["checksum"][:16]))
+        return 0
+    if a.verify:
+        from . import portable as Pt
+
+        try:
+            body = Pt.load(a.verify)
+        except (OSError, ValueError) as exc:
+            print("REFUSED: %s" % exc)
+            return 2
+        vw, vh = body["size"]
+        vspec = Pn.PanelSpec(**body["spec"])
+        cv = Pn.draw(vspec, vw, vh, keys=Pn.PANEL_KEYS, title=body.get("title"),
+                     active=body.get("active", True))
+        bad = Pt.verify(vspec, cv, body=body, title=body.get("title"))
+        if bad:
+            print("REFUSED: this build's rendering disagrees with %s in %d place(s)"
+                  % (Path(a.verify).name, len(bad)))
+            for x, y, role, found in bad[:6]:
+                print("  (%s,%s) expected %s, found %r" % (x, y, role, found))
+            return 2
+        print("%s  matches this build: %d pixel(s) agree, checksum %s"
+              % (Path(a.verify).name, vw * vh, body["checksum"][:16]))
+        return 0
     if a.window:
         # **A window needs a display, and there is no way to fake one.** So the failure is caught and named
         # rather than allowed to surface as a Tcl traceback -- a caller on a headless machine should be told
@@ -744,6 +781,11 @@ def main(argv=None):
 
     pn = sub.add_parser("panel", help="draw a panel and verify it against its own layout")
     pn.add_argument("out", nargs="?", help="where to write the PNG; omit with --text")
+    pn.add_argument("--export", metavar="FILE",
+                    help="write the panel as portable JSON: layout, roles, keys, colours and characters, "
+                         "with a checksum, so a tool in another language can draw the same one")
+    pn.add_argument("--verify", metavar="FILE",
+                    help="check that this build's rendering still matches an exported panel")
     pn.add_argument("--window", action="store_true",
                     help="open a real window (needs tkinter and a display); refuses rather than crashing "
                          "when either is missing")

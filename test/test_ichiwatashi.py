@@ -53,6 +53,7 @@ from ichiwatashi import perceptual as PC
 from ichiwatashi import figures as FIG
 from ichiwatashi import keys as KEYS
 from ichiwatashi import panel as PANEL
+from ichiwatashi import portable as PORT
 from ichiwatashi import terminal as TERM
 from ichiwatashi import window as WIN
 
@@ -1149,6 +1150,110 @@ class TestPanel(unittest.TestCase):
         used = {c[1] for c in im.getcolors(maxcolors=1 << 16) or []}
         self.assertTrue(used <= set(self.PALETTE.values()),
                         "colours outside the palette: %r" % (used - set(self.PALETTE.values())))
+
+
+class TestPortablePanel(unittest.TestCase):
+    """The panel as data a tool in another language can read.
+
+    NTVI assigns this repository the shared pixel layer and the other three embed it. Two are Python, **Volcano
+    Separator is PowerShell and Node** -- so "embed" cannot be an import, and must not become a runtime
+    dependency either (source shared, dependency not). What crosses all three boundaries is data.
+    """
+
+    def test_the_export_carries_everything_an_embedder_needs(self):
+        body = PORT.export("compact", title="Ichi")
+        for field in ("format", "tier", "size", "spec", "layout", "close_pixels", "title_room",
+                      "roles", "keys", "colours", "chars", "checksum"):
+            self.assertIn(field, body, "an embedder needs %r" % field)
+        self.assertEqual(body["format"], PORT.FORMAT)
+        # **both colour and character, keyed the same way**: an embedder reads one index and gets both, which
+        # is not true if one table is keyed by role name and the other by role key
+        self.assertEqual(set(body["colours"]), set(body["keys"].values()))
+        self.assertEqual(set(body["chars"]), set(body["keys"].values()),
+                         "colours and chars must be keyed alike: %r vs %r"
+                         % (sorted(body["colours"]), sorted(body["chars"])))
+        for role in body["roles"]:
+            key = body["keys"][role]
+            self.assertIn(key, body["colours"], "no colour for %r" % role)
+            self.assertIn(key, body["chars"], "no character for %r" % role)
+        # the one role with no single character says so rather than being absent
+        self.assertIsNone(body["chars"][body["keys"]["title_text"]])
+        self.assertIn("null", body["chars_note"])
+
+    def test_the_checksum_is_reproducible_across_writers(self):
+        """**Canonical JSON, not `json.dumps` defaults** -- key order and spacing are exactly what two writers
+        disagree about, and the checksum has to survive being recomputed elsewhere."""
+        a = PORT.export("normal", title="Ichi")
+        b = PORT.export("normal", title="Ichi")
+        self.assertEqual(a["checksum"], b["checksum"])
+        self.assertEqual(PORT.canonical({"b": 1, "a": 2}), PORT.canonical({"a": 2, "b": 1}))
+
+    def test_a_round_trip_through_a_file(self):
+        body = PORT.export("wide", title="Ichi")
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "panel.json"
+            p.write_text(json.dumps(body, ensure_ascii=False), encoding="utf-8")
+            back = PORT.load(p)
+        self.assertEqual(back["checksum"], body["checksum"])
+        self.assertEqual(back["layout"], body["layout"])
+
+    def test_a_tampered_file_is_refused_by_its_own_checksum(self):
+        """**The checksum is what makes this a shared fact rather than a familiar filename.**"""
+        body = PORT.export("normal", title="Ichi")
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "panel.json"
+            body2 = dict(body, keys=dict(body["keys"], frame_dark="XX"))
+            p.write_text(json.dumps(body2, ensure_ascii=False), encoding="utf-8")
+            with self.assertRaises(ValueError) as ctx:
+                PORT.load(p)
+            self.assertIn("checksum", str(ctx.exception))
+
+    def test_an_unknown_format_is_refused_by_name(self):
+        body = dict(PORT.export("normal"), format="something/9")
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "panel.json"
+            p.write_text(json.dumps(body, ensure_ascii=False), encoding="utf-8")
+            with self.assertRaises(ValueError) as ctx:
+                PORT.load(p)
+            self.assertIn("something/9", str(ctx.exception))
+            self.assertIn(PORT.FORMAT, str(ctx.exception), "the format this build speaks has to be named")
+
+    def test_verify_checks_a_rendering_against_the_file(self):
+        body = PORT.export("normal", title="Ichi")
+        spec = PANEL.PanelSpec(**body["spec"])
+        cv = PANEL.draw(spec, body["size"][0], body["size"][1], keys=PANEL.PANEL_KEYS, title="Ichi")
+        self.assertEqual(PORT.verify(spec, cv, body=body, title="Ichi"), [])
+        # a file edited after export is caught before any comparison
+        tampered = dict(body, keys=dict(body["keys"]))
+        tampered["keys"]["frame_dark"] = "XX"
+        self.assertIn("checksum", [p[2] for p in PORT.verify(spec, cv, body=tampered)])
+
+    def test_verify_reports_a_size_mismatch_without_pixel_coordinates(self):
+        body = PORT.export("compact")
+        spec = PANEL.PanelSpec(**body["spec"])
+        cv = PANEL.draw(spec, body["size"][0], body["size"][1], keys=PANEL.PANEL_KEYS)
+        other = dict(body, size=[999, 999], checksum=None)
+        other["checksum"] = PORT._checksum(other)
+        problems = PORT.verify(spec, cv, body=other)
+        self.assertEqual(problems[0][2], "size")
+        self.assertEqual(problems[0][:2], (-1, -1))
+
+    def test_the_cli_exports_and_verifies(self):
+        import contextlib
+        import io as _io
+        from ichiwatashi.cli import main
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "panel.json"
+            buf = _io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                self.assertEqual(main(["panel", "--tier", "compact", "--title", "Ichi",
+                                       "--export", str(p)]), 0)
+            self.assertTrue(p.is_file())
+            self.assertIn("checksum", buf.getvalue())
+            buf2 = _io.StringIO()
+            with contextlib.redirect_stdout(buf2):
+                self.assertEqual(main(["panel", "--verify", str(p)]), 0)
+            self.assertIn("agree", buf2.getvalue())
 
 
 class TestKeyboardModel(unittest.TestCase):

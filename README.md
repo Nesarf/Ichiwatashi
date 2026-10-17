@@ -225,6 +225,28 @@ Two things the split bought, both measured:
 Measured availability before choosing any of this: `tkinter` present, `msvcrt` present, `curses` and `termios`
 absent, terminal 80 by 24 — **so a real window is reachable; what was decided first is what to verify.**
 
+## A panel that crosses a language boundary
+
+NTVI's four tools are not all written in one language: **Volcano Separator is PowerShell and Node**. So
+"embed the shared pixel layer" cannot mean `import`, and must not become a runtime dependency — the family
+rule is *source is shared, dependency is not*. What crosses a language boundary is data.
+
+```
+ichiwatashi panel --tier normal --title "Ichiwatashi" --export panel.json
+panel.json  panel exported: normal tier 96x40, 8 role(s), checksum c6ffbe5d401d2d2c
+
+ichiwatashi panel --verify panel.json
+panel.json  matches this build: 3840 pixel(s) agree, checksum c6ffbe5d401d2d2c
+```
+
+The file carries the layout rectangles, the roles, the key each role uses, **a colour and a character keyed
+the same way**, the close mark's pixels, and the title's available width — **plus a checksum over canonical
+JSON** (sorted keys, no spaces) so a reader in another language can recompute it. A file edited after export
+is refused by its own checksum.
+
+**A `null` character means "drawn as font glyphs, not as one mark"**, which is the one role that has no single
+character, and the file says so rather than leaving it out.
+
 ## The clear ground is not a colour
 
 `palette.sample` merges near-duplicates first — a sampler that does not merge measures the encoder, not the
