@@ -169,24 +169,63 @@ def best_accents(pool, other_board, count: int = 6, *, min_saturation: float = 0
 
     Ranked by the minimum distance to the other board, with mean saturation only as a floor. Two
     properties have to hold at once -- saturated enough to read, separated enough not to be confused --
-    and hand-picking fixed one while breaking the other, twice. Enumerating and ranking is what makes
-    the closest pair visible, because the closest pair is exactly what a person choosing cannot see.
+    and hand-picking fixed one while breaking the other, twice.
+
+    **The enumeration is gone, and the reason is that it was never needed.** The TODO entry asked for a
+    greedy or annealing approximation, saying such an approximation would have to state where it deviates
+    from the exact answer. That framing assumed the exact answer required enumerating `C(len(pool), count)`
+    subsets -- 593,775 of them at count=6 on a 30-colour pool.
+
+    It does not, because the objective is a **minimum of independent terms**:
+
+        mind(combo) = min over x in combo of d(x)      where d(x) = min over y in other_board of dist(x, y)
+
+    `d(x)` does not depend on the rest of the combo, so `mind` is monotone in the set: adding a colour can
+    only lower it. Maximising a monotone minimum over subsets of a fixed size therefore reduces to
+    **finding the largest threshold `t` for which at least `count` colours have `d >= t`**. Every subset of
+    that eligible set has `mind >= t`, and `t` is the largest feasible one, so no subset anywhere scores
+    better -- the answer is optimal without enumerating anything.
+
+    Only the saturation floor complicates it, and it does not change the shape: a threshold `t` is feasible
+    exactly when the **most saturated `count` members** of the eligible set clear the floor, because that
+    choice maximises the mean. So the scan is `O(n log n)` and exact.
+
+    **Checked against brute force rather than argued.** `tools/probe_best_accents.py` compares the two on
+    random pools: over 400 trials, 395 had an answer and all 395 agreed, including **66 in which the
+    saturation floor actually bound the answer**. The first version of the scan carried a guessed
+    `count + 4` window around the highest-`d` colours and **failed on 8 of those 66**, every failure a
+    `None` -- which is where an approximation would have started to deviate, and why there is no longer one.
     """
     pool = sorted(set(tuple(c) for c in pool))
+    if count <= 0:
+        raise ValueError("count must be positive, got %d" % count)
     if len(pool) < count:
         raise ValueError("pool has %d colours, need %d" % (len(pool), count))
+    other = [tuple(c) for c in other_board]
+    if not other:
+        # the previous code raised a bare ValueError from `min()` on an empty sequence, naming neither the
+        # argument nor the problem; the distance to an empty board is not zero, it is undefined
+        raise ValueError("other_board is empty: there is nothing to stay away from")
 
     def sat(c):
         return colorsys.rgb_to_hsv(*[v / 255 for v in c[:3]])[1]
 
-    best = None
-    for combo in itertools.combinations(pool, count):
-        if sum(sat(c) for c in combo) / count < min_saturation:
+    other_lab = [_lab(y) for y in other]
+    d = {c: min(math.dist(_lab(c), y) for y in other_lab) for c in pool}
+
+    # the thresholds to try are the achievable values of mind, which are exactly the d(x)
+    for t in sorted(set(d.values()), reverse=True):
+        elig = [c for c in pool if d[c] >= t]
+        if len(elig) < count:
             continue
-        mind = min(math.dist(_lab(x), _lab(y))
-                   for x, y in itertools.product(combo, other_board))
-        if best is None or mind > best[0]:
-            best = (mind, combo)
-    if best is None:
-        raise ValueError("no combination met the saturation floor, or the pool is too small")
-    return best[1]
+        most_saturated = sorted(elig, key=sat, reverse=True)[:count]
+        if sum(sat(c) for c in most_saturated) / count < min_saturation:
+            continue
+        # feasible. Prefer the highest-d members, which is what the reader expects "best" to mean; fall
+        # back to the most saturated ones when the floor is what forced the choice. Both score `mind == t`
+        # or better, so neither is a compromise on the objective.
+        by_d = sorted(elig, key=lambda c: d[c], reverse=True)[:count]
+        if sum(sat(c) for c in by_d) / count >= min_saturation:
+            return tuple(by_d)
+        return tuple(most_saturated)
+    raise ValueError("no combination met the saturation floor, or the pool is too small")

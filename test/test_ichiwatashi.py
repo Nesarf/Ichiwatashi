@@ -8,6 +8,7 @@ one property by destroying another. Each is pinned so it cannot come back.
 from __future__ import annotations
 
 import glob
+import itertools
 import json
 import math
 import os
@@ -668,6 +669,136 @@ class TestPalette(unittest.TestCase):
         for c in got:
             self.assertGreater(min(max(abs(x - y) for x, y in zip(c, o)) for o in other), 40,
                                "%r is too close to the other board" % (c,))
+
+
+class TestBestAccentsIsExact(unittest.TestCase):
+    """The enumeration was replaced by a scan, and the scan is **exact** -- checked against brute force.
+
+    The TODO entry asked for a greedy or annealing **approximation** and said such an approximation would
+    have to state where it deviates. It does not deviate: the objective is a minimum of independent terms,
+
+        mind(combo) = min over x in combo of d(x)      where d(x) = min over y in other_board of dist(x, y)
+
+    so `d(x)` does not depend on the rest of the combo and maximising the minimum over fixed-size subsets
+    reduces to finding the largest threshold with enough colours above it. `test_the_scan_matches_brute_force`
+    is that claim tested rather than argued, and it is the assertion that would have caught a guessed
+    window in the first version of the scan -- which failed on 8 of 66 floor-bound instances.
+    """
+
+    @staticmethod
+    def _brute(pool, other, count, floor):
+        """The exhaustive answer, kept in the tests as the oracle."""
+        import colorsys
+
+        def sat(c):
+            return colorsys.rgb_to_hsv(*[v / 255 for v in c[:3]])[1]
+
+        best = None
+        for combo in itertools.combinations(pool, count):
+            if sum(sat(c) for c in combo) / count < floor:
+                continue
+            mind = min(math.dist(P._lab(x), P._lab(y)) for x, y in itertools.product(combo, other))
+            if best is None or mind > best[0]:
+                best = (mind, combo)
+        return best
+
+    @staticmethod
+    def _objective(combo, other):
+        return min(math.dist(P._lab(x), P._lab(y)) for x, y in itertools.product(combo, other))
+
+    def test_the_scan_matches_brute_force(self):
+        """Random pools, compared on the objective value -- including ones where the floor binds.
+
+        300 trials, and the trial generator deliberately includes high floors so that the saturation
+        constraint is not decorative: in the probe run that produced this test, 66 of 400 trials had a
+        floor that changed the answer, and a scan with a guessed window failed 8 of those.
+        """
+        import random as _r
+        rnd = _r.Random(11)
+        feasible = compared = bound = 0
+        for _ in range(300):
+            n = rnd.randint(8, 12)
+            m = rnd.randint(3, 6)
+            pool = [tuple(rnd.randrange(256) for _ in range(3)) for _ in range(n)]
+            other = [tuple(rnd.randrange(256) for _ in range(3)) for _ in range(m)]
+            count = rnd.randint(2, 4)
+            floor = rnd.choice([0.2, 0.35, 0.5, 0.65])
+            b = self._brute(pool, other, count, floor)
+            nofloor = self._brute(pool, other, count, 0.0)
+            if b is None:
+                with self.assertRaises(ValueError):
+                    P.best_accents(pool, other, count=count, min_saturation=floor)
+                continue
+            feasible += 1
+            if nofloor and abs(nofloor[0] - b[0]) > 1e-9:
+                bound += 1
+            got = P.best_accents(pool, other, count=count, min_saturation=floor)
+            self.assertEqual(len(got), count)
+            self.assertAlmostEqual(self._objective(got, other), b[0], places=9,
+                                   msg="the scan found %r scoring %.6f where brute force found %.6f"
+                                       % (got, self._objective(got, other), b[0]))
+            compared += 1
+        self.assertGreater(compared, 250, "the trial generator must produce answers to compare")
+        self.assertGreater(bound, 20, "the saturation floor must actually bind in these trials: %d" % bound)
+
+    def test_the_answer_is_a_subset_of_the_pool_and_respects_the_floor(self):
+        """Two properties the caller relies on, asserted on a real board."""
+        import colorsys
+        other = [(255, 255, 255), (237, 28, 36)]
+        pool = [(0x7B, 0x4F, 0xCB), (0x86, 0x45, 0xD6), (0x53, 0x2E, 0x8F),
+                (0x63, 0x4A, 0xA8), (0xA5, 0x7B, 0xDB), (0xF0, 0xF0, 0xF0)]
+        got = P.best_accents(pool, other, count=3, min_saturation=0.3)
+        self.assertEqual(len(set(got)), 3, "no duplicates")
+        for c in got:
+            self.assertIn(c, pool, "%r is not from the pool" % (c,))
+        mean_sat = sum(colorsys.rgb_to_hsv(*[v / 255 for v in c[:3]])[1] for c in got) / 3
+        self.assertGreaterEqual(mean_sat, 0.3, "the floor must hold: %.3f" % mean_sat)
+
+    def test_a_pool_that_is_too_small_or_has_no_other_board_is_refused(self):
+        """Named refusals rather than a bare ValueError from an empty `min()`."""
+        with self.assertRaises(ValueError) as ctx:
+            P.best_accents([(1, 2, 3)], [(9, 9, 9)], count=3)
+        self.assertIn("need", str(ctx.exception))
+        with self.assertRaises(ValueError) as ctx:
+            P.best_accents([(1, 2, 3)], [], count=1)
+        self.assertIn("other_board", str(ctx.exception))
+        with self.assertRaises(ValueError) as ctx:
+            P.best_accents([(1, 2, 3)], [(9, 9, 9)], count=0)
+        self.assertIn("positive", str(ctx.exception))
+
+    def test_a_high_floor_falls_back_to_the_most_saturated_eligible_set(self):
+        """When the floor is what forces the choice, the answer is the saturated set -- not a refusal.
+
+        Both choices score the same objective (the threshold is already the largest feasible one), so the
+        fallback is not a compromise; it is the tie-break that keeps the constraint holding.
+        """
+        import colorsys
+        # d-ranked grey colours are far from the board but desaturated; the vivid ones are closer
+        other = [(10, 10, 10)]
+        pool = [(240, 240, 240), (230, 230, 230), (220, 220, 220),
+                (200, 30, 30), (30, 200, 30), (30, 30, 200)]
+        got = P.best_accents(pool, other, count=2, min_saturation=0.6)
+        sats = [colorsys.rgb_to_hsv(*[v / 255 for v in c[:3]])[1] for c in got]
+        self.assertGreaterEqual(sum(sats) / 2, 0.6, "the floor must hold: %s" % (got,))
+        self.assertTrue(all(s > 0.3 for s in sats), "a desaturated colour slipped through: %s" % (got,))
+
+    def test_a_large_pool_is_fast_enough_to_not_need_a_budget(self):
+        """The case the TODO entry was written about: count=6 on a 30-colour pool, 593,775 combinations.
+
+        Not a timing assertion -- those are flaky -- but a bound generous enough that only a return to
+        enumeration could exceed it. Measured: the scan does this in about 0.0001 s, while the enumeration
+        needed 1.03 s at 20 colours and 3.41 s at 24 for the same `count`.
+        """
+        import random as _r
+        import time as _t
+        rnd = _r.Random(5)
+        pool = [tuple(rnd.randrange(256) for _ in range(3)) for _ in range(30)]
+        other = [(255, 255, 255), (10, 10, 10), (200, 40, 60)]
+        t0 = _t.perf_counter()
+        got = P.best_accents(pool, other, count=6, min_saturation=0.1)
+        dt = _t.perf_counter() - t0
+        self.assertEqual(len(got), 6)
+        self.assertLess(dt, 1.0, "a 30-colour pool with count=6 took %.3f s -- enumeration is back" % dt)
 
 
 class TestBuilder(unittest.TestCase):
