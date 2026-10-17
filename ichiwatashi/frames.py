@@ -464,6 +464,9 @@ def read_delays(source, *, unit: str = "ms"):
         except Exception:
             pass  # not an image; fall through to the text reader
 
+    if path.suffix.lower() == ".zip":
+        return _delays_from_zip(path, unit)
+
     text = path.read_text(encoding="utf-8", errors="replace")
     numbers = [int(float(tok)) for tok in re.findall(r"-?\d+(?:\.\d+)?", text)]
     if not numbers:
@@ -473,6 +476,88 @@ def read_delays(source, *, unit: str = "ms"):
         # for this purpose, not a container's internal representation, so reinterpreting it would be wrong
         return numbers, "%d value(s) from %s" % (len(numbers), path.name)
     return numbers, "%d value(s) from %s (read as centiseconds)" % (len(numbers), path.name)
+
+
+def _delays_from_zip(path, unit):
+    """Per-frame durations from an animation archive, or a statement that the archive has none.
+
+    **What `うごイラ` actually is, checked against a client rather than remembered.** The earlier note in this
+    project said the format "is frames plus a per-frame delay table", which is **only true of exports that
+    repackage it**. pixiv's own ZIP contains the frames and nothing else: gallery-dl's pixiv extractor reads
+    the timing from the API (`/v1/ugoira/metadata` -> `["ugoira_metadata"]["frames"]`, each frame being
+    `{"file": ..., "delay": ...}`) and the archive comes from a separate `zip_urls`/`originalSrc` URL. So a
+    native archive **has no answer to give**, and the honest report is to say that instead of an empty list
+    with no explanation.
+
+    The reader therefore accepts both shapes:
+
+        a table inside the archive     any of `metadata.json`, `ugoira_meta.json`, `frames.json`,
+                                       `delays.txt`, `animation.json` -- in the pixiv metadata shape,
+                                       as a bare `frames` array, or as a plain list of numbers
+        frames only                    reported as having no timing, with the frame count, so the caller
+                                       knows the archive was read and not mistaken for something else
+
+    The pixiv shape nests one level (`{"ugoira_metadata": {"frames": [...]}}`) and the delay is in
+    milliseconds there, so it is converted through `unit` like any other value.
+    """
+    import json
+    import zipfile
+
+    names = ("metadata.json", "ugoira_meta.json", "frames.json", "delays.txt", "animation.json")
+    with zipfile.ZipFile(path) as z:
+        members = z.namelist()
+        images = [m for m in members if not m.endswith("/") and
+                  m.lower().rsplit(".", 1)[-1] in ("jpg", "jpeg", "png", "webp", "gif")]
+        table = None
+        for candidate in names:
+            hit = [m for m in members if m.rsplit("/", 1)[-1].lower() == candidate]
+            if hit:
+                table = hit[0]
+                break
+
+        def to_unit(value_ms):
+            return value_ms if unit == "ms" else max(1, round(value_ms / 10))
+
+        if table is None:
+            return [], ("%s holds %d frame(s) and no delay table -- pixiv's own archives keep timing in the "
+                        "API metadata, so it is not in this file" % (path.name, len(images)))
+
+        raw = z.read(table)
+        if table.lower().endswith(".json"):
+            try:
+                data = json.loads(raw.decode("utf-8", errors="replace"))
+            except ValueError as exc:
+                return [], "%s: %s is not valid JSON (%s)" % (path.name, table, exc)
+            # the pixiv shape nests under `ugoira_metadata`; a bare `frames` key is the same thing un-nested
+            if isinstance(data, dict):
+                data = data.get("ugoira_metadata", data)
+                frames = data.get("frames", data) if isinstance(data, dict) else data
+            else:
+                frames = data
+            values = []
+            for item in frames:
+                if isinstance(item, dict):
+                    # `delay` is the field pixiv uses; accept `duration`/`ms` rather than guess silently --
+                    # a wrong key would produce an empty list and look like an archive with no timing
+                    for key in ("delay", "duration", "ms", "duration_ms"):
+                        if key in item:
+                            values.append(int(item[key]))
+                            break
+                    else:
+                        return [], ("%s: a frame entry in %s has no delay field (%s)"
+                                    % (path.name, table, ", ".join(sorted(item))))
+                else:
+                    values.append(int(item))
+            if not values:
+                return [], "%s: %s parsed but held no delays" % (path.name, table)
+            return [to_unit(v) for v in values], ("%d value(s) from %s inside %s"
+                                                  % (len(values), table, path.name))
+        # a plain text table inside the archive
+        numbers = [int(float(tok)) for tok in re.findall(r"-?\d+(?:\.\d+)?",
+                                                         raw.decode("utf-8", errors="replace"))]
+        if not numbers:
+            return [], "%s: %s inside the archive holds no numbers" % (path.name, table)
+        return numbers, "%d value(s) from %s inside %s" % (len(numbers), table, path.name)
 
 
 def even_durations(total_ms: int, count: int):

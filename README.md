@@ -233,6 +233,19 @@ Two sources:
 
 - **an image file that stores durations** (GIF / APNG / WebP)
 - **a plain text table**, one number per line — commas and whitespace both work
+- **an animation archive** (`.zip`), if it carries a table — `metadata.json`, `ugoira_meta.json`,
+  `frames.json`, `delays.txt` or `animation.json`, in the pixiv metadata shape, as a bare `frames` array, or
+  as a plain list of numbers
+
+**A native `うごイラ` archive has no timing to give.** pixiv's ZIP contains the frames and nothing else; the
+delays come from the API (`/v1/ugoira/metadata` → `["ugoira_metadata"]["frames"]`, each entry
+`{"file": ..., "delay": ...}`). So an archive without a table is reported as such, with its frame count —
+which proves it was read rather than mistaken for something else:
+
+```
+native.zip holds 4 frame(s) and no delay table -- pixiv's own archives keep timing in the API metadata,
+so it is not in this file
+```
 
 Two limits, asserted rather than described:
 

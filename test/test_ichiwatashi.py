@@ -15,6 +15,7 @@ import os
 import shutil
 import tempfile
 import unittest
+import zipfile
 
 from pathlib import Path
 
@@ -975,6 +976,107 @@ class TestPackaging(unittest.TestCase):
             # PermissionError from its own cleanup while the assertion above passed.
             os.chdir(old)
             shutil.rmtree(d, ignore_errors=True)
+
+
+class TestDelaysFromAnArchive(unittest.TestCase):
+    """An animation archive, read for timing it may or may not carry.
+
+    **What the format actually is, checked against a client rather than remembered.** An earlier note in this
+    project said `うごイラ` "is frames plus a per-frame delay table". That is true only of exports that
+    repackage it: **pixiv's own ZIP contains the frames and nothing else**, and gallery-dl's extractor reads
+    the timing from the API (`/v1/ugoira/metadata` -> `["ugoira_metadata"]["frames"]`, each entry
+    `{"file": ..., "delay": ...}`) while the archive comes from a separate URL. **So a native archive has no
+    answer to give, and saying that is the correct result** -- not an empty list with no explanation.
+    """
+
+    @staticmethod
+    def _archive(path, table_name=None, table_body=None, frames=4):
+        with zipfile.ZipFile(path, "w") as z:
+            for i in range(frames):
+                im = Image.new("RGBA", (8, 8), (0, 0, 0, 0))
+                px = im.load()
+                for y in range(2, 6):
+                    for x in range(2, 6):
+                        px[x, y] = (200, 60, 60, 255)
+                tmp = Path(str(path) + ".png")
+                im.save(tmp)
+                z.write(tmp, "%06d.png" % i)
+                tmp.unlink()
+            if table_name:
+                z.writestr(table_name, table_body)
+        return path
+
+    def test_the_pixiv_metadata_shape(self):
+        """Nested under `ugoira_metadata`, frames as dicts with `delay` in milliseconds."""
+        with tempfile.TemporaryDirectory() as d:
+            p = self._archive(Path(d) / "a.zip", "metadata.json", json.dumps(
+                {"ugoira_metadata": {"frames": [{"file": "000000.png", "delay": 60} for _ in range(4)]}}))
+            delays, note = F.read_delays(p)
+            self.assertEqual(delays, [60, 60, 60, 60])
+            self.assertIn("metadata.json", note)
+
+    def test_a_bare_frames_array(self):
+        """The same thing without the outer key -- which is what an un-nested export looks like."""
+        with tempfile.TemporaryDirectory() as d:
+            p = self._archive(Path(d) / "b.zip", "frames.json", json.dumps(
+                {"frames": [{"file": "000000.png", "delay": 40} for _ in range(4)]}))
+            self.assertEqual(F.read_delays(p)[0], [40, 40, 40, 40])
+
+    def test_a_text_table_inside_the_archive(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = self._archive(Path(d) / "c.zip", "delays.txt", "80\n80\n120\n40\n")
+            self.assertEqual(F.read_delays(p)[0], [80, 80, 120, 40])
+
+    def test_frames_only_is_reported_as_no_timing(self):
+        """**The native case, and the reason this class exists.**"""
+        with tempfile.TemporaryDirectory() as d:
+            p = self._archive(Path(d) / "native.zip")
+            delays, note = F.read_delays(p)
+            self.assertEqual(delays, [], "an archive with no table has no durations: %r" % (delays,))
+            self.assertIn("no delay table", note)
+            self.assertIn("4 frame", note, "the archive was read, and saying how many frames proves it")
+            self.assertIn("API metadata", note, "and where the timing actually lives")
+
+    def test_centiseconds_are_converted(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = self._archive(Path(d) / "e.zip", "metadata.json", json.dumps(
+                {"ugoira_metadata": {"frames": [{"file": "f", "delay": 60} for _ in range(4)]}}))
+            self.assertEqual(F.read_delays(p, unit="cs")[0], [6, 6, 6, 6])
+
+    def test_a_frame_entry_without_a_delay_field_is_named(self):
+        """A wrong key would otherwise produce an empty list and look like an archive with no timing."""
+        with tempfile.TemporaryDirectory() as d:
+            p = self._archive(Path(d) / "f.zip", "metadata.json", json.dumps(
+                {"frames": [{"file": "000000.png", "wait": 60}]}))
+            delays, note = F.read_delays(p)
+            self.assertEqual(delays, [])
+            self.assertIn("no delay field", note)
+            self.assertIn("file", note, "the keys that were present are listed")
+
+    def test_the_cli_accepts_a_zip(self):
+        from ichiwatashi.cli import main
+        with tempfile.TemporaryDirectory() as d:
+            size = 40
+            for i in range(6):
+                im = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+                px = im.load()
+                for y in range(6, 34):
+                    for x in range(6, 34):
+                        px[x, y] = (200, 60, 60, 255)
+                for y in range(16, 22):
+                    for x in range(14 + i, 20 + i):
+                        px[x, y] = (90, 60, 150, 255)
+                im.save(Path(d) / ("f%02d.png" % i))
+            z = Path(d) / "t.zip"
+            with zipfile.ZipFile(z, "w") as zf:
+                zf.writestr("metadata.json", json.dumps(
+                    {"ugoira_metadata": {"frames": [{"file": "f", "delay": 80} for _ in range(6)]}}))
+            self.assertIn(main(["frames", d, "--delays", str(z)]), (0, 1))
+            # an archive with no table is refused with the reason, not a traceback
+            z2 = Path(d) / "empty.zip"
+            with zipfile.ZipFile(z2, "w") as zf:
+                zf.writestr("000000.png", b"x")
+            self.assertEqual(main(["frames", d, "--delays", str(z2)]), 2)
 
 
 class TestAllowingLossesOneAtATime(unittest.TestCase):
