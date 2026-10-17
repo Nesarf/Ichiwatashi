@@ -124,6 +124,36 @@ Two layout decisions were forced by reading the pixels back rather than by looki
   reference band with the shipped reference marked on it, which is the comparison `tools/calibrate.py`
   prints as text.
 
+## Panels: a frame that verifies itself
+
+NTVI assigns this repository the shared pixel layer — font, palette, **panel layout** — which the other tools
+embed. Something three other projects will embed has to be **verifiable by itself**, so `ichiwatashi/panel.py`
+is a description, a renderer and a pixel check rather than a GUI:
+
+```
+ichiwatashi panel out.png --width 96 --title "Ichiwatashi" --scale 4
+out.png  96x40 logical, written at 384x160
+  3840 pixel(s) checked, 0 disagreed with the layout
+```
+
+**`draw` and `check` walk one definition.** `_role_at` decides what each pixel carries; `draw` paints it and
+`check` compares against it. A first version had the renderer paint "a dark rectangle then a light face" while
+the checker derived the expected role from a diagonal split — **two renderers agreeing with each other
+verifies nothing.** What the check now verifies is the pixels against the layout, which is what it is for.
+
+**And it caught two real things while being built.**
+
+- **90 problems on a correct panel** — the title glyphs are drawn *over* the title bar, so those pixels are
+  legitimately not the bar's colour. `check(..., title=...)` now steps over exactly the glyph box, computed
+  from the same metrics `draw` used, so the rest of the bar is still verified.
+- **A 64-pixel panel titled "Ichiwatashi" drew "Ichi wa.ta.sk"** — the bar had 58 pixels and the word needs
+  65, so the panel displayed a different word and saved successfully. That is the same failure as a figure
+  whose label ran off its canvas. **A title that does not fit is now refused**, and the message names both
+  numbers.
+
+The defaults derive from the font: `title_h = 9` because a 5x7 glyph needs a pixel of clearance above and
+below. A title bar that cannot hold a glyph is not a title bar.
+
 ## The clear ground is not a colour
 
 `palette.sample` merges near-duplicates first — a sampler that does not merge measures the encoder, not the

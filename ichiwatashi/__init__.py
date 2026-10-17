@@ -16,6 +16,7 @@ discipline. **Both would have been trained into a model as ground truth.**
 """
 from .judge import Report, judge
 from .builder import Canvas, from_rows
+from . import panel as Pn
 from .frames import Frame, Timeline, GifWouldLose, even_durations, with_hold, read_delays
 from .palette import sample, saturate, separation, best_accents
 

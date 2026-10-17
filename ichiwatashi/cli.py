@@ -309,6 +309,41 @@ def cmd_build(a):
     return 0
 
 
+def cmd_panel(a):
+    """Draw a panel and verify it before writing anything.
+
+    **The verification is not optional and not a flag.** A panel is the piece the other tools are meant to
+    embed, so a panel that is written without being checked is a panel somebody else inherits unchecked. If
+    `panel.check` returns anything, the file is not written and the exit code is 2 -- the same meaning this
+    command family gives it: "I will not produce this".
+    """
+    from . import panel as Pn
+
+    spec = Pn.PanelSpec(border=a.border, title_h=a.title_h, pad=a.pad, bevel=not a.no_bevel)
+    try:
+        canvas = Pn.draw(spec, a.width, a.height, keys=Pn.PANEL_KEYS, title=a.title)
+    except ValueError as exc:
+        print("REFUSED: %s" % exc)
+        return 2
+    problems = Pn.check(spec, canvas, keys=Pn.PANEL_KEYS, title=a.title)
+    if problems:
+        print("REFUSED: the rendered panel disagrees with its own layout in %d place(s)" % len(problems))
+        for x, y, role, found in problems[:8]:
+            if x < 0:
+                print("  layout: %s" % found)
+            else:
+                print("  (%d,%d) expected %s, found %r" % (x, y, role, found))
+        if len(problems) > 8:
+            print("  ... and %d more" % (len(problems) - 8))
+        return 2
+    im = Pn.render(spec, a.width, a.height, keys=Pn.PANEL_KEYS, palette=Pn.PANEL_PALETTE,
+                   title=a.title, scale=a.scale)
+    im.save(a.out)
+    print("%s  %dx%d logical, written at %dx%d" % (Path(a.out).name, a.width, a.height, im.width, im.height))
+    print("  %d pixel(s) checked, 0 disagreed with the layout" % (a.width * a.height))
+    return 0
+
+
 def cmd_frames(a):
     from PIL import Image
     from . import frames as F
@@ -653,6 +688,21 @@ def main(argv=None):
     ft.add_argument("--check", action="store_true",
                     help="report what the font can and cannot say, instead of emitting it")
     ft.set_defaults(func=cmd_font)
+
+    pn = sub.add_parser("panel", help="draw a panel and verify it against its own layout")
+    pn.add_argument("out", help="where to write the PNG")
+    pn.add_argument("--width", type=int, default=96)
+    pn.add_argument("--height", type=int, default=40)
+    pn.add_argument("--title")
+    pn.add_argument("--scale", type=int, default=1,
+                    help="integer upscale; 1 writes at one pixel per pixel")
+    pn.add_argument("--border", type=int, default=2)
+    pn.add_argument("--title-h", dest="title_h", type=int, default=9,
+                    help="title bar height; the default holds a 5x7 glyph with a pixel above and below")
+    pn.add_argument("--pad", type=int, default=2)
+    pn.add_argument("--no-bevel", action="store_true",
+                    help="draw a flat frame instead of a lit top-left and shaded bottom-right")
+    pn.set_defaults(func=cmd_panel)
 
     f = sub.add_parser("frames", help="assemble frames and report drift")
     f.add_argument("directory")

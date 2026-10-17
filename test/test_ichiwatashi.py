@@ -51,6 +51,7 @@ from ichiwatashi.judge import _opaque
 from ichiwatashi import palette as P
 from ichiwatashi import perceptual as PC
 from ichiwatashi import figures as FIG
+from ichiwatashi import panel as PANEL
 
 
 def coords_note(r):
@@ -976,6 +977,134 @@ class TestPackaging(unittest.TestCase):
             # PermissionError from its own cleanup while the assertion above passed.
             os.chdir(old)
             shutil.rmtree(d, ignore_errors=True)
+
+
+class TestPanel(unittest.TestCase):
+    """The panel's layout, its renderer, and the check that makes it embeddable.
+
+    NTVI assigns Ichiwatashi the task of *producing* the shared pixel layer -- font, palette, panel layout --
+    which the other tools **embed**. Something three other projects will embed has to be **verifiable by
+    itself**, so this module is a description, a renderer and a pixel check rather than a GUI.
+
+    **The check is the point, and it caught two real things while being built.** Its first version reported 90
+    problems on a *correct* panel -- the title glyphs are drawn over the title bar, so those pixels are
+    legitimately not the bar's colour. And a 64-pixel panel with "Ichiwatashi" as its title drew
+    "Ichi wa.ta.sk": the title bar had 58 pixels and the word needs 65, so the panel showed a different word
+    and saved successfully, which is the same failure as a figure whose label ran off its canvas.
+    """
+
+    ROLES = ("frame_dark", "frame_light", "title", "title_text", "well", "content")
+    KEYS = {"frame_dark": "d", "frame_light": "l", "title": "t",
+            "title_text": "w", "well": "b", "content": "."}
+    PALETTE = {"d": (24, 20, 32, 255), "l": (96, 88, 128, 255), "t": (52, 44, 72, 255),
+               "w": (232, 228, 244, 255), "b": (36, 32, 48, 255), ".": (60, 52, 84, 255)}
+
+    def test_a_correct_panel_has_no_problems(self):
+        cv = PANEL.draw(PANEL.PanelSpec(), 96, 40, keys=self.KEYS, title="Hi")
+        self.assertEqual(PANEL.check(PANEL.PanelSpec(), cv, keys=self.KEYS, title="Hi"), [])
+
+    def test_the_title_exclusion_is_doing_work(self):
+        """Without it the check reports the glyph pixels as errors -- which is what it did at first."""
+        cv = PANEL.draw(PANEL.PanelSpec(), 96, 40, keys=self.KEYS, title="Hi")
+        without = PANEL.check(PANEL.PanelSpec(), cv, keys=self.KEYS)
+        self.assertGreater(len(without), 0, "the glyphs must land where the bar was expected")
+        self.assertTrue(all(p[2] == "title" for p in without),
+                        "every such problem is a title-bar pixel: %r" % (without[:3],))
+
+    def test_the_check_bites_when_one_pixel_is_wrong(self):
+        """A checker that cannot fail is not a checker. This flips one frame pixel."""
+        cv = PANEL.draw(PANEL.PanelSpec(), 96, 40, keys=self.KEYS)
+        self.assertEqual(PANEL.check(PANEL.PanelSpec(), cv, keys=self.KEYS), [])
+        cv.put(0, 0, self.KEYS["frame_light"])
+        problems = PANEL.check(PANEL.PanelSpec(), cv, keys=self.KEYS)
+        self.assertEqual(problems, [(0, 0, "frame_dark", "l")])
+
+    def test_the_dithering_pattern_of_the_bevel_is_lit_top_left_and_shaded_bottom_right(self):
+        """A bevel is asymmetric by definition; the first version had the two sides disagree."""
+        where = PANEL.layout(PANEL.PanelSpec(), 96, 40)
+        fx0, fy0, fx1, fy1 = where["frame"]
+        cv = PANEL.draw(PANEL.PanelSpec(), 96, 40, keys=self.KEYS)
+        # **Asserted edge by edge rather than at hand-picked corners**, because two attempts at corner
+        # coordinates were both off by one: `(fx0 + 1, fy0)` is the *outer* ring (row 0), not the inner one.
+        # Walking each edge asks the question the renderer is answering -- "is this whole side lit or shaded"
+        # -- instead of asking me to get an index right.
+        inner_top = [cv.get(x, fy0 + 1) for x in range(fx0 + 1, fx1 - 1)]
+        inner_left = [cv.get(fx0 + 1, y) for y in range(fy0 + 1, fy1 - 1)]
+        inner_bottom = [cv.get(x, fy1 - 2) for x in range(fx0 + 1, fx1 - 1)]
+        inner_right = [cv.get(fx1 - 2, y) for y in range(fy0 + 1, fy1 - 1)]
+        self.assertEqual(set(inner_top), {"l"}, "the whole top inner ring is lit: %r" % (set(inner_top),))
+        self.assertEqual(set(inner_left), {"l"}, "and the whole left one: %r" % (set(inner_left),))
+        # **The corners belong to two edges, and the renderer gives them to the top and the left.** So the
+        # bottom and right inner rings start with one lit pixel each -- measured: the bottom reads
+        # `'l' + 'd' * 94`. Excluding the end pixels is asserting what the rule actually says rather than
+        # asserting a symmetry the rule does not claim.
+        self.assertEqual(set(inner_bottom[1:]), {"d"},
+                         "the bottom inner ring is shaded apart from the corner: %r"
+                         % (set(inner_bottom),))
+        self.assertEqual(set(inner_right[1:]), {"d"},
+                         "and the right one too: %r" % (set(inner_right),))
+        self.assertEqual(inner_bottom[0], "l", "the bottom-left corner is on the lit left edge")
+        self.assertEqual(inner_right[0], "l", "and the top-right corner is on the lit top edge")
+
+    def test_a_missing_role_is_refused(self):
+        keys = dict(self.KEYS)
+        del keys["content"]
+        with self.assertRaises(ValueError) as ctx:
+            PANEL.draw(PANEL.PanelSpec(), 96, 40, keys=keys)
+        self.assertIn("content", str(ctx.exception))
+
+    def test_a_canvas_too_small_for_its_own_border_is_refused(self):
+        with self.assertRaises(ValueError):
+            PANEL.layout(PANEL.PanelSpec(border=3), 5, 40)
+        # **14, not 15**: border 2 on both sides plus a 9-row title plus 2 rows of content is exactly 15, so
+        # 15 is a panel that just fits -- the first version of this test asserted it should be refused.
+        with self.assertRaises(ValueError):
+            PANEL.layout(PANEL.PanelSpec(title_h=9), 96, 14)
+        PANEL.layout(PANEL.PanelSpec(title_h=9), 96, 15)   # and this one must not raise
+
+    def test_a_title_that_does_not_fit_is_refused_rather_than_clipped(self):
+        """**The defect the render showed**: a clipped title is a different word, drawn silently."""
+        with self.assertRaises(ValueError) as ctx:
+            PANEL.draw(PANEL.PanelSpec(), 64, 40, keys=self.KEYS, title="Ichiwatashi")
+        msg = str(ctx.exception)
+        self.assertIn("Ichiwatashi", msg)
+        self.assertIn("widen", msg, "the way out has to be stated")
+
+    def test_check_reports_a_title_that_does_not_fit_without_pixel_coordinates(self):
+        cv = PANEL.draw(PANEL.PanelSpec(), 96, 40, keys=self.KEYS, title="Hi")
+        problems = PANEL.check(PANEL.PanelSpec(), cv, keys=self.KEYS, title="A title far too long for this")
+        self.assertEqual(len(problems), 1)
+        self.assertEqual(problems[0][2], "title_fits")
+        self.assertEqual(problems[0][:2], (-1, -1), "a layout problem has no pixel to point at")
+
+    def test_render_upscales_by_a_whole_number_only(self):
+        im = PANEL.render(PANEL.PanelSpec(), 96, 40, keys=self.KEYS, palette=self.PALETTE,
+                          title="Hi", scale=3)
+        self.assertEqual(im.size, (96 * 3, 40 * 3))
+        for bad in (0, -1, 1.5, "2"):
+            with self.assertRaises(ValueError):
+                PANEL.render(PANEL.PanelSpec(), 96, 40, keys=self.KEYS, palette=self.PALETTE, scale=bad)
+
+    def test_the_cli_verifies_before_writing(self):
+        """A panel nobody checked is a panel somebody else inherits unchecked."""
+        from ichiwatashi.cli import main
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "p.png"
+            self.assertEqual(main(["panel", str(out), "--width", "96", "--title", "Hi", "--scale", "3"]), 0)
+            self.assertTrue(out.is_file())
+            from PIL import Image as _I
+            self.assertEqual(_I.open(out).size, (96 * 3, 40 * 3))
+            # and a title that cannot fit is refused with exit 2, and leaves no file
+            bad = Path(d) / "bad.png"
+            self.assertEqual(main(["panel", str(bad), "--width", "48", "--title", "Ichiwatashi"]), 2)
+            self.assertFalse(bad.exists(), "a refusal must not leave a file behind")
+
+    def test_every_rendered_colour_comes_from_the_key_table(self):
+        """The rule `figures` states: a rendered image may not contain a colour nobody asked for."""
+        im = PANEL.render(PANEL.PanelSpec(), 96, 40, keys=self.KEYS, palette=self.PALETTE, title="Hi")
+        used = {c[1] for c in im.getcolors(maxcolors=1 << 16) or []}
+        self.assertTrue(used <= set(self.PALETTE.values()),
+                        "colours outside the palette: %r" % (used - set(self.PALETTE.values())))
 
 
 class TestDelaysFromAnArchive(unittest.TestCase):
