@@ -104,10 +104,16 @@ def cmd_palette(a):
     if a.crop:
         im = im.crop(tuple(int(v) for v in a.crop.split(",")))
     cols = P.sample(im, a.count, merge_distance=a.merge)
+    by_role = P.roles(im, cols)
     print("%s  %dx%d" % (Path(a.image).name, im.width, im.height))
     print("  %d colour(s) after merging within %d per channel" % (len(cols), a.merge))
+    # **The role is printed beside each colour, because it answers a question the hex does not.** A reader
+    # looking at sixteen hex values cannot tell which one is the outline; `roles` can, and it is judged by
+    # the relation (how often a colour is on the outline side of a fill/outline pair) rather than by
+    # position. See its docstring for why the positional criterion failed on 16 of 20 sprites.
     for c in cols:
-        print("    #%02X%02X%02X" % c)
+        role = by_role.get(tuple(c[:3]), "-")
+        print("    #%02X%02X%02X  %s" % (c[0], c[1], c[2], role))
     if a.saturate != 1.0:
         print("  raised to saturation x%.1f:" % a.saturate)
         for c in cols:

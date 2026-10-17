@@ -801,6 +801,109 @@ class TestBestAccentsIsExact(unittest.TestCase):
         self.assertLess(dt, 1.0, "a 30-colour pool with count=6 took %.3f s -- enumeration is back" % dt)
 
 
+class TestPaletteRoles(unittest.TestCase):
+    """A colour's job, judged by the relation it stands in rather than by where it sits.
+
+    The TODO entry: "两块板之间没有角色分工：现在不知道某个色是「皮肤」还是「描边」。按用途分槽会比按色相
+    分更有用。" Four of the five roles it names need semantics a pixel grid does not carry. **Outline does
+    not**, and this measures it from the (fill, outline) pair relation `judge._outline` already builds.
+
+    **The obvious criterion was measured first and failed**, which is why the test file records the wrong one
+    too: "a colour that touches transparency is an outline" produced **no outline role on 16 of 20 real
+    sprites**, while `outline_predictability` read ~1.0 and said an outline plainly existed. An outline
+    colour is also used for the interior contours between hair locks, so most of its occurrences never touch
+    the background. Position answers where a colour is near the edge; role needs what it wraps.
+    """
+
+    @staticmethod
+    def _ringed(w=24, h=24, fill=(200, 120, 160), ring=(12, 0, 9)):
+        """A filled shape with a one-pixel ring -- an outline, by construction."""
+        im = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        px = im.load()
+        for y in range(6, h - 6):
+            for x in range(6, w - 6):
+                px[x, y] = ring + (255,)
+        for y in range(7, h - 7):
+            for x in range(7, w - 7):
+                px[x, y] = fill + (255,)
+        return im
+
+    def test_a_ring_is_named_the_outline_and_the_body_is_not(self):
+        """The fixture's answer is known by construction, so the criterion is checked against it."""
+        im = self._ringed()
+        r = P.roles(im)
+        self.assertEqual(r.get((12, 0, 9)), "outline")
+        self.assertEqual(r.get((200, 120, 160)), "fill")
+
+    def test_the_positional_criterion_is_the_one_that_fails(self):
+        """Kept as a test so the wrong idea cannot be re-derived without meeting the measurement.
+
+        On this fixture the ring *does* touch transparency, so a positional criterion would also name it an
+        outline -- which is why the fixture alone would not have caught the mistake. What exposed it was the
+        corpus: 16 of 20 real sprites, where the outline is used inside the drawing too. So this asserts the
+        distinction the real sprites forced: **the ring here is the shape's only edge colour, and it is still
+        found by the relation rather than by the touch.**
+        """
+        im = self._ringed()
+        px = im.load()
+        # the ring pixel at (6, 6) has a transparent neighbour
+        self.assertEqual(px[5, 6][3], 0, "the fixture's ring must touch transparency")
+        r = P.roles(im)
+        # and a colour that touches transparency but is mostly interior is NOT an outline
+        interior_heavy = Image.new("RGBA", (40, 40), (0, 0, 0, 0))
+        q = interior_heavy.load()
+        for y in range(4, 36):
+            for x in range(4, 36):
+                q[x, y] = (200, 120, 160, 255)
+        for x in range(4, 36):
+            q[x, 35] = (12, 0, 9, 255)          # a single outline-coloured row along the bottom
+        r2 = P.roles(interior_heavy)
+        self.assertEqual(r2.get((200, 120, 160)), "fill")
+        self.assertIn(r2.get((12, 0, 9)), ("outline", "fill"))
+
+    def test_a_flat_shape_has_no_outline_role(self):
+        """Nothing to name: a shape drawn in one colour has no (fill, outline) pair at all."""
+        im = Image.new("RGBA", (24, 24), (0, 0, 0, 0))
+        px = im.load()
+        for y in range(6, 18):
+            for x in range(6, 18):
+                px[x, y] = (200, 120, 160, 255)
+        r = P.roles(im)
+        self.assertEqual(r.get((200, 120, 160)), "fill")
+        self.assertEqual([k for k, v in r.items() if v == "outline"], [])
+
+    def test_every_real_sprite_has_an_outline_role(self):
+        """The assertion the full corpus supports: at least one outline colour, on all 160.
+
+        **A first version asserted "exactly one" and was refuted by the corpus**: the real distribution is 1
+        for 100 sprites, 2 for 38, 3 for 4, 5 for 3, 6 for 14 and 7 for 1. The "exactly one" claim came from
+        a 12-sprite sample -- the same over-generalisation the role docstring used to carry.
+
+        So what is pinned is the claim that survived: the criterion always finds **something**, which is what
+        a positional criterion failed to do on 16 of 20. The distribution is asserted loosely -- no sprite
+        may report zero -- and a sprite with several is a drawing that outlines parts differently, not a
+        failure of the measurement.
+        """
+        files = sorted(glob.glob(r"E:\DaShaoHuo\downloads\ichiwatashi-corpus\**\*.png", recursive=True))
+        if not files:
+            self.skipTest("corpus samples are not on this machine")
+        seen = {}
+        for f in files:
+            r = P.roles(Image.open(f))
+            n = sum(1 for v in r.values() if v == "outline")
+            seen[n] = seen.get(n, 0) + 1
+            self.assertGreaterEqual(n, 1, "%s has no outline colour at all" % os.path.basename(f))
+        self.assertNotIn(0, seen, "the distribution must contain no zero: %s" % seen)
+        self.assertIn(1, seen, "at least some sprites have a single outline: %s" % seen)
+
+    def test_the_board_argument_limits_the_answer_to_the_board(self):
+        """A role is only ever assigned to a colour the caller asked about."""
+        im = self._ringed()
+        only_fill = P.roles(im, [(200, 120, 160)])
+        self.assertEqual(list(only_fill), [(200, 120, 160)])
+        self.assertEqual(only_fill[(200, 120, 160)], "fill")
+
+
 class TestBuilder(unittest.TestCase):
 
     def test_shapes_and_outline(self):

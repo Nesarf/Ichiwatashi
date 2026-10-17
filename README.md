@@ -124,6 +124,35 @@ Two layout decisions were forced by reading the pixels back rather than by looki
   reference band with the shipped reference marked on it, which is the comparison `tools/calibrate.py`
   prints as text.
 
+## Palette roles
+
+`palette.roles(image)` says what job each colour does, and it judges that by **the relation a colour stands
+in**, not by where it sits:
+
+```
+#927BCE  fill
+#000000  fill
+#0C0009  outline
+```
+
+Two colours a reader cannot tell apart as hex values — `#000000` and `#0C0009` — are different roles, which
+is the point.
+
+**Only the outline role is measured confidently.** The TODO entry asked for 皮肤 / 头发 / 服装 / 描边 / 高光
+slots; four of those need semantics a pixel grid does not carry, because nothing in the data says which
+region is skin rather than cloth. `highlight` is deliberately not assigned: the obvious criterion (most
+neighbours are darker) put 224 colours into that role across 20 sprites, four to seventeen per sprite — that
+is what a gradient looks like at every step, not a role.
+
+The criterion is the `(fill, outline)` pair relation `judge._outline` already builds, and **the positional
+alternative was measured first and failed**: "touches transparency" produced no outline role at all on 16 of
+20 real sprites, while `outline_predictability` simultaneously read ~1.0. An outline colour is also used for
+the interior contours between hair locks, so most of its occurrences never touch the background.
+
+Over all 160 sprites, every one has at least one outline colour; the count is 1 for 100 of them, 2 for 38, 3
+for 4, 5 for 3, 6 for 14 and 7 for 1. The most common single outline colour is `(26, 0, 35)` in 80 sprites,
+and `(12, 0, 9)` in 37 — so it is not one constant across the generation.
+
 ## Frame drift, two ways
 
 `Timeline.drift()` compares each frame's bounding-box corner against its placement: it measures how far the
