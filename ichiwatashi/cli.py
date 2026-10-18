@@ -254,6 +254,19 @@ def cmd_font(a):
     if a.format == "powershell":
         # The consumer's own shape: a hashtable body it can paste, and the encoding its renderer reads.
         print(render_table(ordered, per_line=4))
+    elif a.format == "json":
+        # **A form another language can read without parsing a PowerShell literal.** The keys are the
+        # characters and the values are 14 hex digits, which is the same encoding the table has always used.
+        import json as _json
+
+        body = {"format": "ichiwatashi.font/1",
+                "glyph_w": 5, "glyph_h": 7,
+                "glyphs": {k: "".join("%02X" % r for r in glyphs[k].rows) for k in sorted(glyphs)}}
+        body["checksum"] = __import__("hashlib").sha256(
+            _json.dumps({k: v for k, v in body.items() if k != "checksum"},
+                        sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        ).hexdigest()
+        print(_json.dumps(body, ensure_ascii=False, indent=1, sort_keys=True))
     elif a.format == "hex":
         for k in sorted(glyphs):
             print("%s	%s" % (k, glyphs[k].hex()))
@@ -772,7 +785,7 @@ def main(argv=None):
     # the module rather than the repository also stops the default from depending on the current directory.
     ft.add_argument("--source", default=str(FONT_SOURCE),
                     help="the font source; defaults to the copy inside the package")
-    ft.add_argument("--format", choices=("powershell", "hex", "text"), default="powershell",
+    ft.add_argument("--format", choices=("powershell", "json", "hex", "text"), default="powershell",
                     help="powershell: the hashtable body volcano-separator reads. hex: char<TAB>hex. "
                          "text: each glyph drawn as # and . so it can be read or diffed.")
     ft.add_argument("--check", action="store_true",
