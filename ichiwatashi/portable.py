@@ -59,6 +59,19 @@ def export(tier_name="normal", *, spec=None, title=None, active=True, width=None
         "layout": {k: list(v) if isinstance(v, tuple) else v
                    for k, v in where.items() if not k.startswith("_")},
         "close_pixels": sorted([list(p) for p in where.get("_close_px", set())]),
+        # **The bevel rule travels as data, because it cannot travel as code.** A renderer in another language
+        # has to know which ring of the frame is lit; if it guesses, the two sides draw different windows and
+        # nobody can say which is right. Stating it here makes the rule one thing with two implementations
+        # rather than two ideas that happen to agree today.
+        "bevel_rule": {
+            "outer_ring": "frame_dark",
+            "inner_ring": "frame_light",
+            "lit_sides": ["top", "left"] if spec.bevel else [],
+            "ring_offset": 1,
+            "note": "a pixel at distance 0 from the frame edge is frame_dark; at distance ring_offset it is "
+                    "frame_light when it lies on a lit side, otherwise frame_dark; corners belong to the "
+                    "top or the left",
+        },
         "title": title,
         "title_room": list(Pn.title_room(spec, where)),
         "active": active,

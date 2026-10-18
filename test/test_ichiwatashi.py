@@ -1163,7 +1163,7 @@ class TestPortablePanel(unittest.TestCase):
     def test_the_export_carries_everything_an_embedder_needs(self):
         body = PORT.export("compact", title="Ichi")
         for field in ("format", "tier", "size", "spec", "layout", "close_pixels", "title_room",
-                      "roles", "keys", "colours", "chars", "checksum"):
+                      "roles", "keys", "colours", "chars", "checksum", "bevel_rule"):
             self.assertIn(field, body, "an embedder needs %r" % field)
         self.assertEqual(body["format"], PORT.FORMAT)
         # **both colour and character, keyed the same way**: an embedder reads one index and gets both, which

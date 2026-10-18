@@ -59,6 +59,11 @@ TIERS = {
     "compact": (72, 30),
     "normal": (96, 40),
     "wide": (160, 48),
+    # **A tier sized for a text console, which is what the other tools' windows actually are.** Measured from
+    # Volcano Separator's requirement: 118 characters at 6 pixels wide and 46 rows at 8 tall, plus the frame
+    # and the title bar. Without a tier this large the layout could not hold what a panel of numbers needs,
+    # and the four tools would each invent their own size.
+    "console": (716, 385),
 }
 
 
@@ -261,11 +266,16 @@ def draw(spec, width, height, *, keys, title=None, body=None, glyphs=None, activ
         raise ValueError("keys is missing %s; every role is required" % ", ".join(missing))
     where = layout(spec, width, height)
     cv = B.Canvas(width, height)
-    for y in range(height):
-        for x in range(width):
-            role = _role_at(spec, where, x, y, active=active)
-            if role is not None:
-                cv.put(x, y, keys[role])
+    # **One history entry for the whole panel, not one per pixel.** `put` records a floor for undo unless a
+    # shape is open, and a 716x385 panel is 275,660 pixels -- measured, the console tier exhausted the history
+    # before the frame was finished. `rect` already opens a shape; `draw` did not, which was an oversight
+    # rather than a decision. History is still correct: one panel is one operation.
+    with cv._shape("panel"):
+        for y in range(height):
+            for x in range(width):
+                role = _role_at(spec, where, x, y, active=active)
+                if role is not None:
+                    cv.put(x, y, keys[role])
     cx0, cy0, cx1, cy1 = where["content"]
     if body is not None:
         for row_i, row in enumerate(body):
