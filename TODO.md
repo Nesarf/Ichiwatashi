@@ -691,6 +691,41 @@
 
 ---
 
+### 跨仓库：共享像素层变成可查的（2026-10-18）
+
+- [x] **`tools/check_embeds.py`：逐个嵌入处核对「是不是同一份」。**
+      家族规则是「一处生产、各处嵌入」，而这条规则有一个**没有天然探测器**的失效方式：**拷贝会漂**。
+      每棵树仍然画出一个看起来对的框，没有东西会变红 —— 只是其中一份不再是谁都同意的那份。
+
+      脚本对每个嵌入处问两件事：**与本次构建是否逐像素一致**、**checksum 是否与其它处相同**。
+
+      **第二个问题才是必须问的那个。** 今天测出第三个嵌入处（Volcano）的导出**带着标题**，
+      于是它对着源能过 `--verify`、却与另外两份 checksum 不同 —— **各自都对，而它们不是同一个**。
+      去掉标题重导之后三份逐字节相同（`a43fff9be4a8e5e3`），而标题仍在渲染时由各工具传入。
+
+      **而检查器自己也验过能失败**（`--root` 指向合成的临时树，期望写在前面）：
+
+      | 造的情形 | 期望 | 实测 |
+      |---|---|---|
+      | 一份改了却没重签 | 报出来，且脚本不崩 | 「could not be read」，退出码 1 |
+      | 一份带标题导出并重签 | 报「不一致」 | 「carries a title」，退出码 1 |
+      | 三份原样 | 通过 | 退出码 0 |
+
+      同一次运行的结果：
+
+      ```
+      source  : 88 glyph(s) from font5x7.txt
+      torikago           panel matches this build  716 x 385  checksum a43fff9be4a8e5e3
+      nanodesu           panel matches this build  716 x 385  checksum a43fff9be4a8e5e3
+      volcano-separator  panel matches this build  716 x 385  checksum a43fff9be4a8e5e3
+
+      3 site(s) embed the same panel and the same font, and both match this build
+      ```
+
+- [ ] **还没做的一条**：共享布局里**没有「内容区文字」这个角色**（只有 `title_text`），
+      于是两个 Python 读取器都借它当正文墨色。修法在源头 —— 面板层加 `content_text`，
+      导出与 `--verify` 会跟着走。理由与「高光」那条同族：能读不等于有权。
+
 ## 四、明确不做
 
 - [-] **沙箱执行**。「拆包，别人判」是 nanodesu 的价值所在 ——
