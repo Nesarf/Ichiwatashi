@@ -32,6 +32,7 @@ CHARS = {
     "title": "-",
     "title_inactive": ".",
     "title_text": None,     # the glyphs are drawn as themselves, not as one character
+    "content_text": None,   # same: body text is glyphs, so a character dump shows the characters
     "close_mark": "x",      # the same mark the window draws, so the text version shows it too
     "well": " ",
     "content": " ",

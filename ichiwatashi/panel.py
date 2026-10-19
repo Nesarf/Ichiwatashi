@@ -43,13 +43,23 @@ __all__ = ["PanelSpec", "PANEL_ROLES", "PANEL_KEYS", "PANEL_PALETTE", "TIERS", "
 #: rather than a tint applied at render time, because the difference has to be a *role* for `check` to verify
 #: it -- a tint would be a rendering detail that no test could see.
 PANEL_ROLES = ("frame_dark", "frame_light", "title", "title_inactive", "title_text",
-               "close_mark", "well", "content")
+               "close_mark", "well", "content", "content_text")
 
-#: One key per role. **Unique even where two roles share a colour**, because `check` compares keys: a shared
-#: key would let a pixel in the title bar satisfy the frame's expectation, and the check would pass on a panel
-#: with its parts in the wrong places.
+#: **Two of those roles are ink rather than area.** `title_text` and `content_text` are drawn as glyphs *over*
+#: a rectangle instead of filling one, so `_role_at` never returns them -- and that is why they can be added
+#: without touching the checker. They are still roles, for two reasons: a renderer needs one colour per job,
+#: and a body colour invented by each embedder is exactly the "four windows, four palettes" failure this layer
+#: exists to prevent. Measured before this role existed: all three renderers (two Python, one PowerShell) drew
+#: body text in `title_text`, which meant a change to the bar's ink silently restyled every report.
 PANEL_KEYS = {"frame_dark": "fd", "frame_light": "fl", "title": "ta", "title_inactive": "ti",
-              "title_text": "tx", "close_mark": "cm", "well": "wl", "content": "ct"}
+              "title_text": "tx", "close_mark": "cm", "well": "wl", "content": "ct",
+              "content_text": "cx"}
+
+#: One key per role, **unique even where two roles share a colour**, because `check` compares keys: a shared
+#: key would let a pixel in the title bar satisfy the frame's expectation, and the check would pass on a panel
+#: with its parts in the wrong places. `content_text` is the case this rule was written for -- its colour is
+#: close to `title_text`'s and could be made equal, and the two must still be separate keys, because one of
+#: them is allowed to change without the other.
 
 #: The size tiers, as `(width, height)` in logical pixels. **One layout at three sizes, not three layouts** --
 #: which is only true if every tier passes the same check, and a test asserts that. The narrowest tier is sized
@@ -83,6 +93,8 @@ PANEL_PALETTE = {
     "ta": (52, 44, 72, 255),      # title bar, active
     "ti": (30, 27, 40, 255),      # title bar, inactive -- darker and desaturated, the usual cue
     "tx": (232, 228, 244, 255),   # title text
+    "cx": (212, 206, 232, 255),   # body text: **a shade under the title**, because the bar names the window
+                                  # and a report is read for longer, so the two should not be one colour
     "cm": (208, 72, 88, 255),     # the close mark: red, so it reads as the one destructive control
     "wl": (36, 32, 48, 255),      # the well's floor
     "ct": (60, 52, 84, 255),      # content area
