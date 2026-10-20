@@ -82,6 +82,86 @@ def verify_panel(path: Path) -> tuple:
     return not bad, body, ("%d pixel(s) disagree with this build" % len(bad)) if bad else ""
 
 
+#: The two Python readers are separate copies **on purpose** -- embedded, never imported, so each tree runs
+#: without the other existing. The data check above says both trees embed one layout; it says nothing about
+#: whether both *readers* still draw that layout the same way. That is the one thing which can drift while
+#: every tree's own suite stays green, and it has already happened once: a case-folding defect lived in both
+#: copies for a while, and no test in either tree could see it -- it was found by reading, not by running.
+READERS = {
+    "torikago": "triage",
+    "nanodesu": "nanodesu-release",
+}
+
+#: The same question for every reader: mixed case, an indent, a tab the font may not hold, and enough lines to
+#: reach a second page so the page marker is compared too. **Written down rather than derived**, because the
+#: point is that two implementations are asked one question -- a question that moved with the data would not be
+#: one question.
+PROBE_TITLE = "SHARED LAYOUT"
+PROBE_LINES = ["report line one", "  indented line two", "MiXeD case and a tab\there", "last line"]
+PROBE_PAGES = ["line %d" % i for i in range(60)]
+
+
+def _reader(name, path):
+    """Load one reader by path. They share a module name, so each gets a distinct one here."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("embed_%s" % name.replace("-", "_"), path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def compare_renderings(root):
+    """Ask every Python reader for the same picture and compare the bytes. Returns problems.
+
+    Two renderings are compared because they fail differently: the **character** form needs no image library,
+    so a machine without one can still tell whether the readers agree; the **image** form is what a person
+    actually sees, and it is the only way to catch a divergence in colour, in the marker's placement, or in the
+    integer upscale.
+    """
+    problems, texts, images, notes = [], {}, {}, []
+    layout_path = root / "triage" / ("panel.json")
+    font_path = root / "triage" / ("font.json")
+    for name, tree in READERS.items():
+        path = root / tree / "panel_window.py"
+        if not path.is_file():
+            problems.append("%s: no reader at %s" % (name, path))
+            continue
+        try:
+            mod = _reader(name, path)
+            layout = mod.load(layout_path)
+            draw = mod.load_font(font_path)
+        except (OSError, ValueError, ImportError) as exc:
+            problems.append("%s: its reader could not load the shared files (%s)" % (name, exc))
+            continue
+        try:
+            plain = mod.text(layout, PROBE_LINES, title=PROBE_TITLE)
+            paged = mod.text(layout, PROBE_PAGES, title=PROBE_TITLE, page=1)
+        except ValueError as exc:
+            problems.append("%s: it refused text this build accepts (%s)" % (name, exc))
+            continue
+        texts[name] = _sha("\n".join(plain + paged))
+        try:
+            first = mod.image(layout, PROBE_LINES, title=PROBE_TITLE, scale=2, draw_fn=draw)
+            second = mod.image(layout, PROBE_PAGES, title=PROBE_TITLE, scale=2, draw_fn=draw, page=1)
+        except ImportError:
+            notes.append("%s: no image library here, so its pixels could not be compared" % name)
+            continue
+        images[name] = hashlib.sha256(first.tobytes() + second.tobytes()).hexdigest()
+
+    for kind, seen in (("text", texts), ("image", images)):
+        if len(seen) > 1 and len(set(seen.values())) > 1:
+            problems.append("the two %s renderings are not identical: %s"
+                            % (kind, "; ".join("%s gives %s" % (n, d[:8]) for n, d in seen.items())))
+        for name, digest in seen.items():
+            print("%-18s %-5s %s" % (name, kind, digest[:16]))
+    for note in notes:
+        print("  note: %s" % note)
+    if not texts and not images:
+        problems.append("no reader produced a rendering, so agreement was not tested")
+    return problems
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="does every consumer embed the same shared layer?")
     ap.add_argument("--root", default=str(HERE.parent),
@@ -138,6 +218,10 @@ def main(argv=None) -> int:
             if count != len(source_glyphs):
                 problems.append("%s: its font holds %d glyph(s), the source has %d"
                                 % (name, count, len(source_glyphs)))
+
+    print()
+    print("renderings  (one layout, one text, every Python reader)")
+    problems.extend(compare_renderings(root))
 
     print()
     if checked == 0:
