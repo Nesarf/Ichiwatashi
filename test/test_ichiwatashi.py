@@ -948,10 +948,18 @@ class TestPackaging(unittest.TestCase):
 
         The release workflow checks this too; asserting it here means the failure arrives while editing rather
         than at the last step of a release.
+
+        **Read with a regex rather than `tomllib`.** That module arrives in 3.11 and this suite runs on 3.9 --
+        measured on CI, where the 3.9 entries failed with `No module named 'tomllib'` and nothing else, after
+        the frames accessor was fixed. A parser is not needed to read one string, and adding a dependency to
+        read it would be a second thing that can be absent.
         """
-        import tomllib
+        import re
         root = Path(__file__).resolve().parents[1]
-        declared = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
+        pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
+        found = re.search(r'^version\s*=\s*"([^"]+)"', pyproject, re.M)
+        self.assertIsNotNone(found, "pyproject.toml has no top-level `version = \"...\"` line")
+        declared = found.group(1)
         import ichiwatashi as I
         self.assertEqual(declared, I.__version__,
                          "pyproject.toml says %r but ichiwatashi.__version__ says %r"
