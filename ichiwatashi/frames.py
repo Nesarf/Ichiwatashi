@@ -33,12 +33,27 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-__all__ = ["Frame", "Timeline", "GifWouldLose", "LOSS_KINDS", "read_delays"]
+__all__ = ["Frame", "Timeline", "GifWouldLose", "LOSS_KINDS", "read_delays", "pixel_rows"]
 
 #: The losses GIF cannot avoid, by name. **Two, not three, and the names are what a caller allows.**
 #: A third candidate -- "a frame mixes opaque and transparent pixels" -- was a false positive on every
 #: ordinary sprite and is gone; see `gif_losses`.
 LOSS_KINDS = ("transparency", "palette")
+
+
+def pixel_rows(image):
+    """Every pixel of `image`, as tuples, on every Pillow the declared floor allows.
+
+    **Pillow renamed this accessor and the floor was never raised with it.** `getdata()` is deprecated
+    from Pillow 12 (removal scheduled for 14) and `get_flattened_data()` does not exist before it,
+    while `pyproject.toml` still says `pillow>=9`. On Python 3.9 pip resolves to a Pillow older than
+    the rename -- measured on CI, where five frame tests failed with `'Image' object has no attribute
+    'get_flattened_data'` while the 3.12 entries passed. Both spellings return the same tuples, so one
+    name here covers the whole range and the floor stays honest.
+    """
+    getter = getattr(image, "get_flattened_data", None) or image.getdata
+    return list(getter())
+
 
 
 class GifWouldLose(Exception):
@@ -318,7 +333,7 @@ class Timeline:
         semi = 0
         colours = set()
         for f in frames:
-            data = list(f.get_flattened_data())
+            data = pixel_rows(f)
             alphas = [p[3] for p in data]
             semi += sum(1 for a in alphas if 0 < a < 255)
             colours.update(data)

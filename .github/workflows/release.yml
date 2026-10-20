@@ -40,8 +40,14 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install the build tooling
-        run: python -m pip install --upgrade build twine
+      - name: Install the build tooling, and this project's own dependencies
+        # **`.` is here because the suite imports them at module level.** The first run of this
+        # workflow died at the suite step with `No module named 'PIL'`: `Pillow` is declared as this
+        # package's one runtime dependency, the test module imports it while being collected, and the
+        # step installed only `build` and `twine`. Installing the project itself pulls in whatever it
+        # declares, so the next dependency cannot repeat this. Measured: the same suite passes in a
+        # clean venv once the dependency is there.
+        run: python -m pip install --upgrade build twine .
 
       - name: The tag must match the version in pyproject.toml
         run: |

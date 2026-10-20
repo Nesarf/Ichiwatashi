@@ -3138,7 +3138,7 @@ class TestFigures(unittest.TestCase):
             img = FIG.render(c, keys, scale)
             self.assertEqual(img.size, (c.width * scale, c.height * scale))
             allowed = {tuple(v[:3]) for v in keys.values() if v[3] > 0}
-            got = {p[:3] for p in img.convert("RGB").get_flattened_data()}
+            got = {p[:3] for p in F.pixel_rows(img.convert("RGB"))}
             self.assertTrue(got <= allowed, "the renderer invented colours: %s" % (got - allowed))
 
     def test_no_ink_falls_outside_the_canvas(self):
@@ -3298,11 +3298,11 @@ class TestFigures(unittest.TestCase):
         sprite = self._sprite()
         c, keys = FIG.silhouette_map(sprite, title="SIL")
         img = FIG.render(c, keys, 1)
-        shape = {p[:3] for p in img.convert("RGB").get_flattened_data()}
+        shape = {p[:3] for p in F.pixel_rows(img.convert("RGB"))}
         self.assertIn(keys["s"][:3], shape)
         # the shape occupies exactly the sprite's drawn extent, offset by the border and any title
-        drawn = sum(1 for p in list(sprite.get_flattened_data()) if p[3] > 0)
-        got = sum(1 for p in img.convert("RGB").get_flattened_data() if p[:3] == keys["s"][:3])
+        drawn = sum(1 for p in F.pixel_rows(sprite) if p[3] > 0)
+        got = sum(1 for p in F.pixel_rows(img.convert("RGB")) if p[:3] == keys["s"][:3])
         self.assertEqual(got, drawn)
 
     def test_a_bar_length_is_the_value_it_encodes(self):
@@ -3861,6 +3861,46 @@ class TestGifLosses(unittest.TestCase):
             rc2 = main(["frames", d, "--gif", str(Path(d) / "out.gif"), "--allow-loss"])
             self.assertIn(rc2, (0, 1), "with --allow-loss it is written, and notes are a code 1")
             self.assertTrue((Path(d) / "out.gif").is_file())
+
+
+class TestThePixelAccessorAcrossPillowVersions(unittest.TestCase):
+    """Pillow renamed the accessor and the declared floor stayed where it was.
+
+    `getdata()` is deprecated from Pillow 12 and gone in 14; `get_flattened_data()` does not exist
+    before it. `pyproject.toml` says `pillow>=9`, and on Python 3.9 pip resolves to a Pillow older
+    than the rename -- measured on CI before `frames.pixel_rows` existed: five frame tests failed with
+    `'Image' object has no attribute 'get_flattened_data'` while the 3.12 entries passed. Both spellings
+    return the same tuples, which is what makes one name enough.
+    """
+
+    def test_the_old_spelling_is_used_when_the_new_one_is_missing(self):
+        class OldImage:
+            """A Pillow older than the rename: `getdata` only."""
+
+            def getdata(self):
+                return [(1, 2, 3, 4), (5, 6, 7, 8)]
+
+        self.assertEqual(F.pixel_rows(OldImage()), [(1, 2, 3, 4), (5, 6, 7, 8)])
+
+    def test_the_new_spelling_is_used_when_it_is_there(self):
+        class NewImage:
+            def get_flattened_data(self):
+                return [(9, 9, 9, 255)]
+
+            def getdata(self):                     # must not be reached
+                raise AssertionError("the deprecated accessor was called although the new one exists")
+
+        self.assertEqual(F.pixel_rows(NewImage()), [(9, 9, 9, 255)])
+
+    def test_a_real_image_agrees_with_the_deprecated_call(self):
+        im = Image.new("RGBA", (3, 2), (10, 20, 30, 40))
+        import warnings
+
+        with warnings.catch_warnings():
+            # Pillow 12 deprecates `getdata`; the point here is the value, not the warning.
+            warnings.simplefilter("ignore", DeprecationWarning)
+            legacy = list(im.getdata())
+        self.assertEqual(F.pixel_rows(im), legacy)
 
 
 if __name__ == "__main__":
