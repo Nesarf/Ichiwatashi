@@ -3256,9 +3256,13 @@ class TestFigures(unittest.TestCase):
         "no rows by design" from "not measured yet".
         """
         import json as _json
-        rows = [_json.loads(l) for l in
-                (Path(__file__).resolve().parents[1] / "corpus" / "sources.jsonl")
-                .read_text(encoding="utf-8").splitlines() if l.strip()]
+        ledger = Path(__file__).resolve().parents[1] / "corpus" / "sources.jsonl"
+        if not ledger.is_file():
+            # **Repository evidence, deliberately not in the sdist** -- the sibling tool made the same
+            # choice for its corpus. A suite unpacked from an sdist has no ledger to read, and failing
+            # there would be a statement about packaging rather than about the ledger.
+            self.skipTest("corpus/sources.jsonl is repository evidence; the sdist does not carry it")
+        rows = [_json.loads(l) for l in ledger.read_text(encoding="utf-8").splitlines() if l.strip()]
         self.assertEqual(len(rows), 3, "three sources are declared")
         kinds = {}
         for r in rows:

@@ -1,0 +1,11 @@
+# What the sdist carries.
+#
+# **The test suite is shipped, so it has to be shippable.** Without this file the sdist held
+# `test/test_ichiwatashi.py` and nothing else from that directory: no `__init__.py`, so
+# `python -m unittest discover -s test -t .` failed there with "Start directory is not importable", and no
+# `data/`, so the one fixture the colour-difference test reads was missing. A file that looks like a test
+# suite and cannot run is the same shape as a wheel that looked installed and could not find its font.
+include LICENSE
+include README.md
+recursive-include test *.py
+recursive-include test/data *
