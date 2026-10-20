@@ -35,11 +35,17 @@ HERE = Path(__file__).resolve().parent.parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
+#: The directory the Torikago checkout lives in. **A constant rather than a literal in four places**, because
+#: this tree was called `triage` long after the package, the command and the repository had all become
+#: `torikago` -- the local path was the one name nobody had moved, and four copies of it here is how a rename
+#: gets forgotten. The package name is lowercase; the directory is capitalised like the repository.
+TORIKAGO = "Torikago"
+
 #: Where each embedding site keeps its two files, relative to the checkout root. **Written down rather
 #: than discovered**, because a search would also find the source and the build directory and then
 #: report agreement between a file and itself.
 SITES = {
-    "torikago": ("triage", "panel.json", "font.json"),
+    "torikago": (TORIKAGO, "panel.json", "font.json"),
     "nanodesu": ("nanodesu-release", "panel.json", "font.json"),
     "volcano-separator": ("../volcano-separator/bin", "panel.json", None),
 }
@@ -88,7 +94,7 @@ def verify_panel(path: Path) -> tuple:
 #: every tree's own suite stays green, and it has already happened once: a case-folding defect lived in both
 #: copies for a while, and no test in either tree could see it -- it was found by reading, not by running.
 READERS = {
-    "torikago": "triage",
+    "torikago": TORIKAGO,
     "nanodesu": "nanodesu-release",
 }
 
@@ -120,8 +126,8 @@ def compare_renderings(root):
     integer upscale.
     """
     problems, texts, images, notes = [], {}, {}, []
-    layout_path = root / "triage" / ("panel.json")
-    font_path = root / "triage" / ("font.json")
+    layout_path = root / TORIKAGO / "panel.json"
+    font_path = root / TORIKAGO / "font.json"
     for name, tree in READERS.items():
         path = root / tree / "panel_window.py"
         if not path.is_file():
