@@ -1,7 +1,7 @@
 # TODO
 
 > 状态口径：`[x]` 已做（**并附实测证据**）· `[ ]` 未做 · `[-]` 明确不做
-> **最近整理：2026-10-12** · 测试 **70 passed, 12 subtests** · 工作树干净
+> **最近整理：2026-10-18** · 测试 **236 passed, 1 skipped** · 从未发布过任何版本（0.1.0，无 tag）· 工作树干净
 >
 > **为什么写在仓库里**：这个项目丢过一次测量记录，于是「那条误报修了没」答不上来。
 > 清单比测量轻，但丢的方式一样。**所以每条已做项都带着它当时的数字**，
@@ -350,7 +350,7 @@
 
 ---
 
-## 二、下一轮（2026-10-17 起，全部未做）
+## 二、下一轮（2026-10-17 起，2026-10-18 全部完成）
 
 **这一节是新的，而它不从「还有哪些没做」长出来 —— 它从这一轮做完的东西里长出来。**
 下面每一条都标了出处：是哪个提交、哪次测量、或者哪一行代码让它成立。
@@ -469,9 +469,12 @@
       **而做的时候抓到一处真不一致**：`colours` 用短键而 `chars` 用角色名 —— **嵌入方拿到的是键，
       所以两者必须同一种索引**，否则读者得知道哪个是哪个。测试抓到的，不是读者。
 
-- [ ] **一个工具一个工具接这份数据**，而**从 Volcano 开始** —— 因为那一侧已经有一个窗口，
-      也已经写下了它自己的限制（抗锯齿、像素字形被关掉）。**先改一个承认了问题的地方，
-      比先在一个空白处开新窗更容易验证。**
+- [x] **三处都接完了，而验证方式不是「看它们长得像」，是逐点核对。**
+      **Volcano 先接**（因为那一侧已经有一个窗口，也写下了它自己的限制），它拿到 88 个字形（原 61）、
+      边框来自 `panel.json`、标题在运行期给定、正文用 `content_text`；**Nanodesu 与 Torikago 随后**，
+      各自把两个文件嵌进自己的仓库，运行期不读别的仓库。
+      **而「接完了」这句话现在有守卫**：`tools/check_embeds.py` 逐个嵌入处核对，
+      再拿同一份布局与同一段文字喂给两个 Python 读取器比对两次产出（见「三、已做」那条）。
 
 ### 2.2 NTVI 的 Ichiwatashi 侧：窗口
 
@@ -701,7 +704,8 @@
 
       **第二个问题才是必须问的那个。** 今天测出第三个嵌入处（Volcano）的导出**带着标题**，
       于是它对着源能过 `--verify`、却与另外两份 checksum 不同 —— **各自都对，而它们不是同一个**。
-      去掉标题重导之后三份逐字节相同（`a43fff9be4a8e5e3`），而标题仍在渲染时由各工具传入。
+      去掉标题重导之后三份逐字节相同，现在的是 `974460bf932d728f`（`content_text` 让布局多了一个角色，
+      所以这个值比最初那次多了几步）。
 
       **而检查器自己也验过能失败**（`--root` 指向合成的临时树，期望写在前面）：
 
@@ -715,12 +719,28 @@
 
       ```
       source  : 88 glyph(s) from font5x7.txt
-      torikago           panel matches this build  716 x 385  checksum a43fff9be4a8e5e3
-      nanodesu           panel matches this build  716 x 385  checksum a43fff9be4a8e5e3
-      volcano-separator  panel matches this build  716 x 385  checksum a43fff9be4a8e5e3
+      torikago           panel matches this build  716 x 385  checksum 974460bf932d728f
+      nanodesu           panel matches this build  716 x 385  checksum 974460bf932d728f
+      volcano-separator  panel matches this build  716 x 385  checksum 974460bf932d728f
+
+      renderings  (one layout, one text, every Python reader)
+      torikago           text  ef5e97774e08ac7f
+      nanodesu           text  ef5e97774e08ac7f
+      torikago           image ee047994ad219d4c
+      nanodesu           image ee047994ad219d4c
 
       3 site(s) embed the same panel and the same font, and both match this build
       ```
+
+      **数据相同不等于画出来的相同。** 两个 Python 读取器各自是嵌入而不是依赖，所以它们**能漂** ——
+      而漂的时候每棵树自己的套件都还是绿的。所以脚本还拿**同一份布局、同一段文字**
+      （含缩进、混合大小写、一个字体可能没有的 tab、以及够到第二页的 60 行）喂给两边，
+      比对**两种产出**：字符行（不需要图像库，没有 PIL 的机器也能比）与像素（人真正看到的那个）。
+      **而它同样验过能失败**：一份把正文画回标题墨色 → 只报图像不一致；
+      一份改了行距 → 连字符行也不一致。
+
+      **限度照实写**：PowerShell 那一侧的**像素**不在这个比对里，因为要拿到它就得运行那个工具。
+      它共享的是数据（由 checksum 证明三处同一份），而它的语法是解析而非执行。
 
 - [x] **正文有了自己的墨色角色（`content_text`）。**
       做之前实测过：**三个渲染器（两个 Python、一个 PowerShell）都把报告正文画在 `title_text` 里**，
