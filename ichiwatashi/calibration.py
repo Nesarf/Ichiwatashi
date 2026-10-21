@@ -169,7 +169,14 @@ def outside(metric: str, value: float, *, margin: float = 0.5,
 
 def how_far(metric: str, value: float, *,
             generation: str = DEFAULT_GENERATION):
-    """How many reference ranges a value sits outside its range, signed. Used only for ordering."""
+    """How many band widths a value sits outside its range. **A magnitude, not a signed distance.**
+
+    The docstring here said "signed" for a while and the code never was: both branches return a
+    positive number. Nothing noticed because the only caller (`judge`) uses it for ordering, where the
+    sign does not matter -- it was found when a caller wanted to say which side a value fell on and
+    would have reported "far below" and "far above" as the same thing. Which side is readable from the
+    value and the range; this function answers "by how much".
+    """
     bucket = REFERENCE_BY_GENERATION.get(generation)
     if bucket is None or metric not in bucket:
         return 0.0

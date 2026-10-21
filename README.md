@@ -496,6 +496,35 @@ sprite.png  32x32  474 opaque pixel(s)
 
 `--fail-on-note` exits non-zero, so it can be a check rather than a report.
 
+### Place
+
+```bash
+ichiwatashi profile sprite.png
+```
+
+```
+sprite.png  32x32  opaque 302
+  nearest      th155  distance 1.16  compared 3 metric(s), 2 inside
+  next         th105/th123  distance 1.63  compared 4 metric(s), 0 inside
+    isolated_rate           0.060   p05 0.028  median 0.126  p95 0.179   inside
+    bbox_fill               0.699   p05 0.281  median 0.396  p95 0.755   inside
+    largest_cluster_rate    0.510   p05 0.023  median 0.042  p95 0.248   1.16 band(s) above the range
+```
+
+Where a sprite sits between the measured generations. The numbers are the judge's own; what this adds is
+a position: for each generation, how many p05–p95 band widths each metric sits outside, combined as a
+length rather than a sum. `distance 0.00` on both generations means the sprite carries no evidence for
+either, and the report says that instead of naming the one that sorted first.
+
+**No model and no training**, and that is a decision rather than a stage it has not reached: a learned
+verdict needs labels, and the only labels this project can defend are *"this came from known-good
+work"* — which is exactly what the two buckets already are. The property worth keeping is that every
+distance opens back up into the four numbers it came from.
+
+`--generation th155` compares against one table only. TH155 has no `colours_used` band (its palettes are
+interchangeable), so the `compared` count is 3 there and 4 elsewhere — which is why it travels in every
+row.
+
 ### Sample a palette
 
 ```bash

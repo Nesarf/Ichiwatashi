@@ -104,6 +104,34 @@ def cmd_judge(a):
     return rc
 
 
+def cmd_profile(a):
+    """Where a sprite sits between the measured generations.
+
+    **It runs `judge` first and reads its numbers.** A position computed from a second measurement of
+    the same image would be a second answer to "what does this measure", and the two could disagree
+    without anything noticing. What this adds is the placement; the numbers stay the judge's.
+    """
+    from .scope import OutOfScopeError
+    from .judge import judge
+    from . import profile as PR
+
+    rc = 0
+    for p in a.paths:
+        try:
+            r = judge(p, generation=a.generation, anyway=a.anyway)
+        except OutOfScopeError as e:
+            print("REFUSED: %s" % Path(p).name)
+            for line in str(e).splitlines():
+                print("  " + line)
+            print()
+            rc = 2
+            continue
+        result = PR.nearest(r, generations=(a.generation,) if a.generation else None)
+        print(PR.describe(result, "%s  %dx%d  opaque %d" % (Path(p).name, r.width, r.height, r.opaque)))
+        print()
+    return rc
+
+
 def cmd_palette(a):
     from PIL import Image
     from . import palette as P
@@ -750,6 +778,16 @@ def main(argv=None):
                         "other's thresholds flags correct work (measured: 80 of 160 TH155 sprites "
                         "against 8 with the right table). Defaults to %s." % C.DEFAULT_GENERATION)
     j.set_defaults(func=cmd_judge)
+
+    pr = sub.add_parser("profile", help="place a sprite between the measured generations")
+    pr.add_argument("paths", nargs="+")
+    pr.add_argument("--generation", choices=C.GENERATIONS, default=None,
+                    help="compare against this generation only. Without it every generation is tried "
+                         "and the report says whether they can be told apart at all")
+    pr.add_argument("--anyway", action="store_true",
+                    help="place something the reference has no subject for; the numbers are then "
+                         "uncalibrated, exactly as with `judge --anyway`")
+    pr.set_defaults(func=cmd_profile)
 
     p = sub.add_parser("palette", help="sample colours from a reference")
     p.add_argument("image")
