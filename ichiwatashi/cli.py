@@ -325,6 +325,19 @@ def plan_steps(spec):
             plan.append(("flip", _with_layer(layer, {
                 "x0": step["x0"], "y0": step["y0"], "x1": step["x1"], "y1": step["y1"], "axis": axis})))
             continue
+        if kind == "shade":
+            # `light` maps a key to the key its lit band uses; `dark` does the same for the shadowed band.
+            # Both are required: a shade step that does one side only is almost always half a thought.
+            for side in ("light", "dark"):
+                if not isinstance(step.get(side), dict) or not step[side]:
+                    raise SpecError("step %d (shade): %r must be a non-empty object of key -> key"
+                                    % (i, side))
+            depth = step.get("depth", 2)
+            if not isinstance(depth, int) or isinstance(depth, bool) or depth < 1:
+                raise SpecError("step %d (shade): 'depth' must be a positive integer" % i)
+            plan.append(("shade", _with_layer(layer, {
+                "light": dict(step["light"]), "dark": dict(step["dark"]), "depth": depth})))
+            continue
         if kind in ("mask", "unmask"):
             if kind == "unmask":
                 plan.append(("unmask", _with_layer(layer, {})))
@@ -419,6 +432,9 @@ def apply_plan(canvas, plan, *, base_dir=None, _depth=0):
             # `flip` stamps including the background, because the empties inside the rectangle moved too.
             canvas.flip(step["x0"], step["y0"], step["x1"], step["y1"], axis=step["axis"])
             continue
+        if kind == "shade":
+            canvas.shade(step["light"], step["dark"], depth=step["depth"])
+            continue
         if kind == "mask":
             canvas.mask(step["x0"], step["y0"], step["x1"], step["y1"])
             continue
@@ -490,6 +506,7 @@ def cmd_font(a):
 def cmd_build(a):
     from . import builder as B
     from . import layers as L
+    from . import audit as A
 
     spec = json.loads(Path(a.script).read_text(encoding="utf-8"))
     plan = plan_steps(spec)
@@ -527,7 +544,33 @@ def cmd_build(a):
     bad = [(i, len(r)) for i, r in enumerate(rows) if len(r) != canvas.width]
     if bad:
         raise SystemExit("ragged rows: %s" % bad)
+    # **Said now rather than after a measurement.** These are contradictions inside the script -- an entry
+    # nothing uses, a pass that stayed empty, a shaded form with no edge -- not a comparison with real art.
+    if not a.no_hints:
+        notes = A.hints(spec, plan)
+        if notes:
+            print("hints (%d):" % len(notes))
+            for note in notes:
+                print("  - %s" % note)
     return 0
+
+
+def cmd_library(a):
+    """The inventory of a parts folder: what is there, and what names it.
+
+    Exit 1 when a drawing names a part that is not in the folder -- the same meaning the rest of this
+    command family gives 1: "I looked, and there is something to say". An unused part is reported but does
+    not fail: a part kept for a drawing not written yet is a normal way to work.
+    """
+    from . import library as LIB
+
+    try:
+        result = LIB.scan(a.directory)
+    except ValueError as exc:
+        print("REFUSED: %s" % exc)
+        return 2
+    print(LIB.describe(result))
+    return 1 if result["missing"] else 0
 
 
 def cmd_panel(a):
@@ -970,7 +1013,13 @@ def main(argv=None):
     b.add_argument("--preview", help="also write a nearest-neighbour x8 image here")
     b.add_argument("--hide", action="append", default=[], metavar="LAYER",
                    help="omit a declared layer from the picture; it stays in the script")
+    b.add_argument("--no-hints", action="store_true",
+                   help="do not report inconsistencies between what the script declares and what it draws")
     b.set_defaults(func=cmd_build)
+
+    lib = sub.add_parser("library", help="list the parts in a folder and which drawings use them")
+    lib.add_argument("directory")
+    lib.set_defaults(func=cmd_library)
 
     g = sub.add_parser("grid", help="write a shape script's canvas as an editable grid JSON")
     g.add_argument("script")

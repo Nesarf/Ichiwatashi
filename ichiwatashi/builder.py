@@ -331,6 +331,8 @@ class Canvas:
 
     def _write(self, x: int, y: int, key: str):
         """The only place a key reaches a cell. Everything drawing goes through here or through `put`."""
+        if not (0 <= x < self.width and 0 <= y < self.height):
+            return
         if self._clip is not None:
             x0, y0, x1, y1 = self._clip
             if not (x0 <= x <= x1 and y0 <= y <= y1):
@@ -509,6 +511,24 @@ class Canvas:
 
     # -- output ------------------------------------------------------------ #
     def rows(self):
+        """The canvas as text rows, one character per pixel.
+
+        **A key has to be one character here, and this is where that is enforced.** The sprite grid is a
+        character grid, so a two-character key silently makes the rows the wrong width and shifts every
+        column after it. Measured: a script using `hl` and `hd` for shading produced rows 25 to 37
+        characters wide on a 24-wide canvas, and the ragged-row guard reported the symptom a long way from
+        the cause.
+
+        The check lives here rather than at write time because **a panel's palette keys are two
+        characters** (`fd`, `tx`, `ct`) and are perfectly correct: a panel renders through `to_image` and
+        never becomes text. Only the grid form has this requirement, so only the grid form refuses.
+        """
+        for cell in self._cells:
+            if not isinstance(cell, str) or len(cell) != 1:
+                raise ValueError(
+                    "this canvas is being written as a character grid, so every key must be one character; "
+                    "found %r. A longer key shifts every column after it -- rename it to one character, or "
+                    "render the canvas with to_image instead" % (cell,))
         return ["".join(self._cells[y * self.width:(y + 1) * self.width])
                 for y in range(self.height)]
 

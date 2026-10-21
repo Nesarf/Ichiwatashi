@@ -688,6 +688,33 @@ than one that depends on which side of zero the point is on.
 The grid JSON carries the unit and `from_grid` reads it back: a grid reporting 1 for a drawing made on a
 grid of 4 would lose the one fact a reader needs to place anything by hand.
 
+**Shading.** A step, not only a method:
+
+```json
+{"op": "shade", "light": {"h": "l"}, "dark": {"h": "d"}, "depth": 3}
+```
+
+Both bands are required. A shade step that does one side only is almost always half a thought, and the
+`depth` is the band's thickness in pixels.
+
+**Hints.** After a successful build, the tool reports **inconsistencies between what the script declares
+and what it draws** — an entry nothing uses, a declared pass nothing drew on, a shaded form with no
+outline, a canvas that is not a whole number of units, a palette large enough to be a texture. Each is
+checkable from the script alone; none compares the sprite with real art, because a three-colour drawing is
+not wrong for being three colours and a report that said so would be ignored. `--no-hints` skips them.
+
+**A folder of parts.** `ichiwatashi library DIR` lists what is in it:
+
+```
+parts: 3 part(s), 2 drawing(s), 0 ignored
+  part    body.json              32x32  keys -  figure_a.json, figure_b.json
+  draw    figure_a.json          32x32  places body.json, eyes_a.json
+```
+
+The split between a part and a drawing is the one the format already makes: **a drawing declares a palette,
+a part does not.** A part nothing names is reported as unused rather than failed — a part kept for a
+drawing not written yet is a normal way to work — while a drawing naming a part that is not there exits 1.
+
 ### Frames
 
 ```bash
