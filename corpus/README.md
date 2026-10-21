@@ -1,6 +1,7 @@
 # corpus — 测量事实，不是样本
 
-**一行一条 `manifest.jsonl`。** 规则见 `POLICY.md`（准入三门与来源世代）。
+**一行一条 `manifest.jsonl`。** 规则见 `POLICY.md`（准入三门与来源世代）；
+样本本体的存放、训练划分与下架见 `SAMPLES.md`。
 
 ## 为什么这样组织
 
@@ -36,6 +37,10 @@
 | `generation` | `th105/th123` · `th155` · `ugoira` · `other_acg` · `synthetic` |
 | `derived` | **`false` 才能进参照表。** `true` 时必有 `derived_from` |
 | `derived_from` | 源样本的 sha256 |
+| `license` | 训练用样本必填；没有它这一行不能进训练集（`SAMPLES.md` §二） |
+| `license_evidence` | 条款页 URL 与抓取日期 —— **说了许可却不留证据，等于没有许可** |
+| `split` | `train` 或 `held_out`，按作品与作者划分，见 `SAMPLES.md` §五 |
+| `revoked` | 收到下架请求后置 true，本体删除、这一行与哈希保留（`SAMPLES.md` §六） |
 | `eligibility` | `adopted` · `pending`（只有一项正面证据）· `rejected` |
 | `reject_reason` | `eligibility == rejected` 时必填，取自 `POLICY.md` 门 1 的列表 |
 | `lossless` | 是否为未经重编码的索引色/无损 PNG |
