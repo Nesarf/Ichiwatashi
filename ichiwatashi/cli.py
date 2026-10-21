@@ -555,6 +555,39 @@ def cmd_build(a):
     return 0
 
 
+def cmd_pixelate(a):
+    """Turn a drawing into a pixel drawing: downsample by majority, then cut the palette.
+
+    **The output is a starting point, not a finished sprite.** At 96 pixels wide a two-pixel eyebrow and a
+    two-pixel scar are the same two pixels; what this cannot decide is what the drawing meant. Hand it to
+    `grid` and place the parts that matter.
+    """
+    from PIL import Image
+    from . import pixelate as PX
+
+    im = Image.open(a.image)
+    try:
+        out = PX.pixelate(im, width=a.width, height=a.height, colours=a.colours,
+                          background=None if a.no_background else "auto", outline=a.outline,
+                          denoise=a.denoise, edges=a.edges, edge_darken=a.edge_darken,
+                          edge_min_area=a.edge_min_area, edge_tolerance=a.edge_tolerance)
+    except ValueError as exc:
+        print("REFUSED: %s" % exc)
+        return 2
+    path = Path(a.out)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    out.save(path)
+    used = {p for p in out.getdata() if p[3]}
+    print("wrote %s  %dx%d  %d colour(s)" % (path, out.width, out.height, len(used)))
+    if a.preview:
+        scale = a.preview
+        preview_path = Path(a.preview_out) if a.preview_out else path.with_name(
+            "%s_x%d%s" % (path.stem, scale, path.suffix))
+        out.resize((out.width * scale, out.height * scale), Image.NEAREST).save(preview_path)
+        print("wrote %s (x%d, for looking at)" % (preview_path, scale))
+    return 0
+
+
 def cmd_library(a):
     """The inventory of a parts folder: what is there, and what names it.
 
@@ -1016,6 +1049,40 @@ def main(argv=None):
     b.add_argument("--no-hints", action="store_true",
                    help="do not report inconsistencies between what the script declares and what it draws")
     b.set_defaults(func=cmd_build)
+
+    px = sub.add_parser("pixelate", help="turn a drawing into a pixel drawing")
+    px.add_argument("image")
+    px.add_argument("--out", required=True)
+    px.add_argument("--width", type=int, help="target width in pixels; height follows the aspect ratio")
+    px.add_argument("--height", type=int, help="target height in pixels; width follows the aspect ratio")
+    px.add_argument("--colours", type=int, default=24,
+                    help="cut the palette to at most this many colours (default 24, the reference median "
+                         "is 26)")
+    px.add_argument("--no-background", action="store_true",
+                    help="do not treat the four corner colours as a ground; needed when the drawing is not "
+                         "on a flat background")
+    px.add_argument("--outline", metavar="#RRGGBB",
+                    help="draw a one-pixel outline in this colour around the figure")
+    px.add_argument("--edges", action="store_true",
+                    help="darken the rim inside every region large enough to be a form, so two touching "
+                         "areas have a line between them. The rim is the region's own colour darkened, "
+                         "never black")
+    px.add_argument("--edge-darken", type=float, default=0.55, metavar="FACTOR",
+                    help="multiplier for an edge rim against its region's colour (default 0.55)")
+    px.add_argument("--edge-tolerance", type=int, default=24, metavar="DELTA",
+                    help="colours within this much of each other count as one region (default 24). Too "
+                         "small and every step of a gradient gets its own rim")
+    px.add_argument("--edge-min-area", type=int, default=24, metavar="PIXELS",
+                    help="regions smaller than this keep no rim, so eye highlights are not eaten "
+                         "(default 24)")
+    px.add_argument("--denoise", type=int, default=1, metavar="PASSES",
+                    help="median-filter passes before downsampling (default 1). A JPEG's ringing survives a "
+                         "majority vote as speckle; a clean source can pass 0")
+    px.add_argument("--preview", type=int, metavar="SCALE",
+                    help="also write a nearest-neighbour enlargement at this integer scale")
+    px.add_argument("--preview-out", default=None,
+                    help="where the enlargement goes (default: the output path plus _xN)")
+    px.set_defaults(func=cmd_pixelate)
 
     lib = sub.add_parser("library", help="list the parts in a folder and which drawings use them")
     lib.add_argument("directory")
