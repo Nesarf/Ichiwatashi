@@ -279,14 +279,19 @@ def pixelate(image, *, width=None, height=None, colours=24, background="auto", o
                     if pixel[3] >= 128 and _close(pixel, ground):
                         px[x, y] = (0, 0, 0, 0)
     small = sample(im, width=width, height=height)
-    small = reduce_colours(small, colours)
+    # `colours=0` (or None) means **no cut at all**: the drawing is only downsampled and every colour the
+    # majority vote produced survives. That is a different thing from a palette -- the drawing made smaller,
+    # not the drawing made out of few colours.
+    if colours:
+        small = reduce_colours(small, colours)
     if edges:
         small = _edges(small, darken=edge_darken, min_area=edge_min_area,
                         tolerance=edge_tolerance)
         # Every rim is a new colour by construction, so the palette is re-cut afterwards rather than left to
         # grow by one per region. The extra eight slots are the rims; without them a drawing of twenty-four
         # colours would arrive with sixty.
-        small = reduce_colours(small, colours + 8)
+        if colours:
+            small = reduce_colours(small, colours + 8)
     if outline:
         small = _outline(small, outline)
     return small

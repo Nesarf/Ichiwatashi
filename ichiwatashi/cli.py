@@ -1056,8 +1056,8 @@ def main(argv=None):
     px.add_argument("--width", type=int, help="target width in pixels; height follows the aspect ratio")
     px.add_argument("--height", type=int, help="target height in pixels; width follows the aspect ratio")
     px.add_argument("--colours", type=int, default=24,
-                    help="cut the palette to at most this many colours (default 24, the reference median "
-                         "is 26)")
+                    help="cut the palette to at most this many colours; 0 keeps every colour the "
+                         "downsample produced (default 24, the reference median is 26)")
     px.add_argument("--no-background", action="store_true",
                     help="do not treat the four corner colours as a ground; needed when the drawing is not "
                          "on a flat background")
