@@ -201,6 +201,9 @@ SHAPE_ARGS = {
     "cone": ("y0", "y1", "w0", "w1"),
 }
 
+#: Fields that are positions rather than sizes, so a unit of more than one pixel snaps them.
+COORD_FIELDS = ("x0", "x1", "y0", "y1", "cx", "cy")
+
 #: Steps that change the history rather than the canvas. **These are what make a shape script editable
 #: without re-running it**: the TODO entry's complaint was "改一个比例就要重跑整个脚本", and the answer is
 #: that a script can step back over its own earlier steps and try something else in place, so the reader
@@ -210,6 +213,14 @@ HISTORY_OPS = ("undo", "redo")
 
 class SpecError(Exception):
     """A problem with the shape script itself, named by step."""
+
+
+def _unit_of(spec):
+    """1 unit is N pixels. Refused by name, because a typo here moves every coordinate."""
+    unit = spec.get("unit", 1)
+    if not isinstance(unit, int) or isinstance(unit, bool) or unit < 1:
+        raise SpecError("spec: 'unit' must be a positive integer, got %r" % (unit,))
+    return unit
 
 
 def _with_layer(layer, body):
@@ -236,6 +247,8 @@ def plan_steps(spec):
         raise SpecError("spec: 'width' and 'height' are required")
     if not isinstance(spec.get("steps"), list):
         raise SpecError("spec: 'steps' must be a list")
+    _unit_of(spec)          # validated here so a typo cannot reach a canvas
+
     # **Layers are declared once and named per step.** Declared rather than inferred from the steps, so a
     # typo is an error at the top of the file instead of a silently new pass at the bottom.
     # **`layers` present but empty is an error, not a fallback.** A script that declares no passes and one
@@ -416,6 +429,10 @@ def apply_plan(canvas, plan, *, base_dir=None, _depth=0):
         kwargs["key"] = step["key"]
         if kind in ("trap", "cone") and "cx" in step:
             kwargs["cx"] = step["cx"]
+        # **Coordinates snap, lengths do not.** `x0`/`x1`/`y0`/`y1`/`cx`/`cy` are positions and have
+        # to land on the drawing's grid; `w0`/`w1`/`r` are sizes, and rounding those would change the
+        # shape rather than place it. At the default unit of 1 every call here is the identity.
+        kwargs = {k: (canvas.snap(v) if k in COORD_FIELDS else v) for k, v in kwargs.items()}
         getattr(canvas, kind)(**kwargs)
     return applied, undone, redone
 
@@ -476,7 +493,7 @@ def cmd_build(a):
 
     spec = json.loads(Path(a.script).read_text(encoding="utf-8"))
     plan = plan_steps(spec)
-    canvas = L.Layers(spec["width"], spec["height"], spec.get("layers"))
+    canvas = L.Layers(spec["width"], spec["height"], spec.get("layers"), unit=_unit_of(spec))
     applied, undone, redone = apply_plan(canvas, plan, base_dir=Path(a.script).parent)
     out = Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -896,7 +913,8 @@ def cmd_grid(a):
     from . import layers as L
 
     spec = json.loads(Path(a.script).read_text(encoding="utf-8"))
-    canvas = L.Layers(spec["width"], spec["height"], spec.get("layers"), spec.get("bg", "."))
+    canvas = L.Layers(spec["width"], spec["height"], spec.get("layers"), spec.get("bg", "."),
+                      unit=_unit_of(spec))
     apply_plan(canvas, plan_steps(spec), base_dir=Path(a.script).parent)
     grid = canvas.to_grid(spec.get("palette") or {})
     out = Path(a.out)

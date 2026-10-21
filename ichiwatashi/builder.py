@@ -17,6 +17,7 @@ sizes. It is automatic here for the same reason: it is a rule, not a decision.
 """
 from __future__ import annotations
 
+import math
 from contextlib import contextmanager
 from dataclasses import dataclass
 
@@ -40,6 +41,7 @@ class Canvas:
     _history: list = None
     _redo: list = None
     _clip: tuple = None
+    unit: int = 1
     _drawing: int = 0
 
     def __post_init__(self):
@@ -47,6 +49,8 @@ class Canvas:
         self._history = []
         self._redo = []
         self._clip = None
+        if not isinstance(self.unit, int) or isinstance(self.unit, bool) or self.unit < 1:
+            raise ValueError("unit must be a positive integer, got %r" % (self.unit,))
 
     # -- history ---------------------------------------------------------- #
     #
@@ -279,6 +283,26 @@ class Canvas:
                 sby = block.height - 1 - by if axis == "y" else by
                 out._cells[by * out.width + bx] = block._cells[sby * block.width + sbx]
         return self.stamp(out, x0, y0)
+
+    def snap(self, v: int) -> int:
+        """Round a coordinate to the nearest multiple of `unit`.
+
+        **This is snapping, not scaling.** A drawing made on a grid of two is still a drawing of the same
+        size in pixels; what changes is that every coordinate lands on a multiple of two, so what a person
+        places lines up with what the reference was measured on. Scaling would change the picture; this
+        changes only where a coordinate may fall.
+
+        The half-way case rounds away from zero, because a coordinate between two grid lines has no
+        correct answer and the one that is stable under negation is easier to reason about than the one
+        that depends on which side of zero it is on.
+        """
+        if self.unit <= 1:
+            return v
+        sign = -1 if v < 0 else 1
+        return sign * int(math.floor(abs(v) / self.unit + 0.5)) * self.unit
+
+    def snap_xy(self, x: int, y: int):
+        return self.snap(x), self.snap(y)
 
     # -- the mask ---------------------------------------------------------- #
     #
@@ -522,6 +546,7 @@ class Canvas:
             "width": self.width,
             "height": self.height,
             "bg": self.bg,
+            "unit": self.unit,
             "palette": {k: _one(v) for k, v in palette.items()},
             "pixels": self.rows(),
         }
@@ -665,6 +690,10 @@ def from_grid(spec) -> tuple:
                          % (len(unknown), ", ".join(repr(c) for c in unknown),
                             ", ".join(repr(c) for c in sorted(known))))
     canvas = from_rows(rows, bg)
+    unit = spec.get("unit", 1)
+    if not isinstance(unit, int) or isinstance(unit, bool) or unit < 1:
+        raise ValueError("grid: 'unit' must be a positive integer, got %r" % (unit,))
+    canvas.unit = unit
     if bg not in palette:
         palette[bg] = None
     return canvas, palette

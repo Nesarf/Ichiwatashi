@@ -35,7 +35,7 @@ FORWARDED = (
 class Layers:
     """An ordered stack of `builder.Canvas`, bottom first, with one of them current."""
 
-    def __init__(self, width, height, names=None, bg="."):
+    def __init__(self, width, height, names=None, bg=".", unit=1):
         names = list(names) if names else ["base"]
         if not names:
             raise ValueError("a drawing needs at least one layer")
@@ -47,9 +47,10 @@ class Layers:
         self.width = width
         self.height = height
         self.bg = bg
+        self.unit = unit
         self.names = names
         self.current = names[0]
-        self._layers = {n: B.Canvas(width, height, bg) for n in names}
+        self._layers = {n: B.Canvas(width, height, bg, unit=unit) for n in names}
 
     # -- addressing ------------------------------------------------------- #
     def layer(self, name):
@@ -69,6 +70,10 @@ class Layers:
     def current_canvas(self):
         return self._layers[self.current]
 
+    def snap(self, v):
+        """Snapping is the same on every pass: they share a unit."""
+        return self.current_canvas().snap(v)
+
     # -- composing -------------------------------------------------------- #
     def flatten(self, *, hide=()):
         """The stack as one canvas, bottom first. `hide` omits passes by name.
@@ -80,7 +85,10 @@ class Layers:
         unknown = hidden - set(self.names)
         if unknown:
             raise ValueError("unknown layer(s) to hide: %s" % ", ".join(sorted(unknown)))
-        out = B.Canvas(self.width, self.height, self.bg)
+        # The composed canvas carries the unit too: `to_grid` writes it, and a grid that reported unit 1 for
+        # a drawing made on a grid of 4 would lose the one piece of information a reader needs to place
+        # anything by hand.
+        out = B.Canvas(self.width, self.height, self.bg, unit=self.unit)
         for name in self.names:
             if name in hidden:
                 continue

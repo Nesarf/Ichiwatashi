@@ -676,6 +676,18 @@ they were drawn under is not a reason to leave them un-recoloured.
 A mask is **not a history entry**. It is the condition a drawing was made under, not a drawing; a script
 that wants to be unmasked again says `unmask`, which is also the version a reader can see.
 
+**A unit.** `"unit": 4` in the script header says one step of the drawing grid is four pixels. Shape
+**positions** snap to it — `x0`, `x1`, `y0`, `y1`, `cx`, `cy`. **Sizes do not** — `w0`, `w1`, `r` — because
+rounding a radius changes the shape rather than placing it. At the default of 1 every coordinate is
+exactly where the script says.
+
+Snapping rounds away from zero at the half, so `snap(-v)` is `-snap(v)`. A coordinate exactly between two
+grid lines has no correct answer, and the rule that is stable under negation is easier to reason about
+than one that depends on which side of zero the point is on.
+
+The grid JSON carries the unit and `from_grid` reads it back: a grid reporting 1 for a drawing made on a
+grid of 4 would lose the one fact a reader needs to place anything by hand.
+
 ### Frames
 
 ```bash
