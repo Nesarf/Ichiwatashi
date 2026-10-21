@@ -287,6 +287,31 @@ def plan_steps(spec):
                 raise SpecError("step %d (part): 'flip' must be true or false" % i)
             plan.append(("part", _with_layer(layer, {"file": step["file"], "x": step["x"], "y": step["y"], "flip": flip})))
             continue
+        if kind in ("copy", "flip"):
+            # Region verbs. The rectangle is inclusive on both corners, the same convention every shape
+            # in this file uses, so a block read with `crop` writes back at the same numbers.
+            for field in ("x0", "y0", "x1", "y1"):
+                if field not in step:
+                    raise SpecError("step %d (%s): missing %s" % (i, kind, field))
+            if step["x1"] < step["x0"] or step["y1"] < step["y0"]:
+                raise SpecError("step %d (%s): give x1 >= x0 and y1 >= y0" % (i, kind))
+            if kind == "copy":
+                for field in ("dx", "dy"):
+                    if field not in step:
+                        raise SpecError("step %d (copy): missing %s" % (i, field))
+                flip = step.get("flip", False)
+                if not isinstance(flip, bool):
+                    raise SpecError("step %d (copy): 'flip' must be true or false" % i)
+                plan.append(("copy", _with_layer(layer, {
+                    "x0": step["x0"], "y0": step["y0"], "x1": step["x1"], "y1": step["y1"],
+                    "dx": step["dx"], "dy": step["dy"], "flip": flip})))
+                continue
+            axis = step.get("axis", "x")
+            if axis not in ("x", "y"):
+                raise SpecError("step %d (flip): 'axis' must be x or y" % i)
+            plan.append(("flip", _with_layer(layer, {
+                "x0": step["x0"], "y0": step["y0"], "x1": step["x1"], "y1": step["y1"], "axis": axis})))
+            continue
         if kind not in SHAPE_ARGS:
             raise SpecError("step %d: unknown op %r (known: %s, outline, %s)"
                             % (i, kind, ", ".join(sorted(SHAPE_ARGS)), ", ".join(HISTORY_OPS)))
@@ -359,6 +384,16 @@ def apply_plan(canvas, plan, *, base_dir=None, _depth=0):
         # at all -- the version this replaces appended `cx` before `key`, so a script that *did* pass `cx`
         # bound that number to `key` and then `_taper` divided a string by two. No script in the suite
         # used `cx` until the mirrored demo did, which is how a latent defect survives a green suite.
+        if kind == "copy":
+            block = canvas.crop(step["x0"], step["y0"], step["x1"], step["y1"])
+            # `blit`, so the copied block's empty pixels do not stamp out what they land on: a copy is an
+            # addition, and the pixels it did not draw are not its business.
+            canvas.blit(block, step["x0"] + step["dx"], step["y0"] + step["dy"], flip=step["flip"])
+            continue
+        if kind == "flip":
+            # `flip` stamps including the background, because the empties inside the rectangle moved too.
+            canvas.flip(step["x0"], step["y0"], step["x1"], step["y1"], axis=step["axis"])
+            continue
         kwargs = {k: step[k] for k in SHAPE_ARGS[kind]}
         kwargs["key"] = step["key"]
         if kind in ("trap", "cone") and "cx" in step:

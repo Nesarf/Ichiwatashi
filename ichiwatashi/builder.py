@@ -227,6 +227,57 @@ class Canvas:
                         self._cells[ty * self.width + tx] = key
         return self
 
+    def crop(self, x0, y0, x1, y1) -> "Canvas":
+        """The rectangle from `(x0, y0)` to `(x1, y1)` inclusive, as its own canvas.
+
+        **The block keeps the requested size even when the rectangle leaves the canvas**, with the part
+        outside filled as background. A cropped-size block would still draw correctly at the origin it was
+        taken from, and would land wrong at any other offset -- which is the case this exists for.
+        """
+        w = x1 - x0 + 1
+        h = y1 - y0 + 1
+        if w <= 0 or h <= 0:
+            raise ValueError("an empty rectangle (%d x %d); give x1 >= x0 and y1 >= y0" % (w, h))
+        block = Canvas(w, h, self.bg)
+        for by in range(h):
+            for bx in range(w):
+                sx, sy = x0 + bx, y0 + by
+                if 0 <= sx < self.width and 0 <= sy < self.height:
+                    block._cells[by * w + bx] = self._cells[sy * self.width + sx]
+        return block
+
+    def stamp(self, block, x: int, y: int) -> "Canvas":
+        """Write a block at `(x, y)` **including its background**.
+
+        This is the one difference from `blit`, and it is not a detail: a region moved and flipped has to
+        write its empty pixels back, or the pixels that were there before the flip stay where they were and
+        the result is the original plus its mirror. `blit` skips the background because a *part* landing on
+        a drawing must not erase it; a region being re-placed must, because it is the same pixels moving.
+        """
+        with self._shape("stamp"):
+            for by in range(block.height):
+                ty = y + by
+                if not 0 <= ty < self.height:
+                    continue
+                for bx in range(block.width):
+                    tx = x + bx
+                    if 0 <= tx < self.width:
+                        self._cells[ty * self.width + tx] = block._cells[by * block.width + bx]
+        return self
+
+    def flip(self, x0, y0, x1, y1, *, axis: str = "x") -> "Canvas":
+        """Flip the rectangle in place. `axis` names the axis it is mirrored across: `x` swaps left and right."""
+        if axis not in ("x", "y"):
+            raise ValueError("axis must be 'x' or 'y', got %r" % (axis,))
+        block = self.crop(x0, y0, x1, y1)
+        out = Canvas(block.width, block.height, self.bg)
+        for by in range(block.height):
+            for bx in range(block.width):
+                sbx = block.width - 1 - bx if axis == "x" else bx
+                sby = block.height - 1 - by if axis == "y" else by
+                out._cells[by * out.width + bx] = block._cells[sby * block.width + sbx]
+        return self.stamp(out, x0, y0)
+
     def put(self, x, y, key: str) -> "Canvas":
         # only a direct call is its own operation; inside `_shape` the caller already recorded one
         if not self._drawing:

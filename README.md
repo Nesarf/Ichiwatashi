@@ -641,6 +641,24 @@ the render.
 exporting something the format cannot carry, so the composition rule is the simple one — a pass that drew
 nothing does not blank the pass underneath it.
 
+**Regions.** Two verbs work on a rectangle rather than on a shape:
+
+```json
+{"op": "copy", "x0": 0, "y0": 0, "x1": 7, "y1": 7, "dx": 8, "dy": 0, "flip": true}
+{"op": "flip", "x0": 0, "y0": 0, "x1": 7, "y1": 7, "axis": "x"}
+```
+
+`copy` reads the rectangle and places it at the offset. It **adds**: the block's empty pixels do not erase
+what they land on, the same rule parts follow.
+
+`flip` mirrors the rectangle **in place**, which means writing the block's empty pixels back too. Skip
+that and the result is the original plus its mirror, sitting in the holes the original left behind — the
+failure is invisible on a solid rectangle and obvious on a sprite. In the code the two differ by exactly
+that, `blit` (adds) against `stamp` (moves).
+
+A rectangle that leaves the canvas keeps its requested size, with the outside filled as background, so a
+block read at one offset and written at another still lines up.
+
 ### Frames
 
 ```bash

@@ -28,7 +28,7 @@ __all__ = ["Layers"]
 #: group on purpose: one layer's history answers "what did I do last" for that pass only.
 FORWARDED = (
     "get", "put", "rect", "disc", "trap", "cone", "line", "recolor", "shade", "outline", "mirror", "blit",
-    "undo", "redo", "clear_history", "rows",
+    "crop", "stamp", "flip", "undo", "redo", "clear_history", "rows",
 )
 
 
