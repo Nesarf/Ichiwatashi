@@ -39,12 +39,14 @@ class Canvas:
     _cells: list = None
     _history: list = None
     _redo: list = None
+    _clip: tuple = None
     _drawing: int = 0
 
     def __post_init__(self):
         self._cells = [self.bg] * (self.width * self.height)
         self._history = []
         self._redo = []
+        self._clip = None
 
     # -- history ---------------------------------------------------------- #
     #
@@ -193,7 +195,7 @@ class Canvas:
                     # what the caller asked for.
                     if direction == "both" and self._cells[y * self.width + mx] != self.bg:
                         continue
-                    self._cells[y * self.width + mx] = key
+                    self._write(mx, y, key)
         return self
 
     def blit(self, other, x: int, y: int, *, flip: bool = False) -> "Canvas":
@@ -224,7 +226,7 @@ class Canvas:
                         continue
                     tx = x + px
                     if 0 <= tx < self.width:
-                        self._cells[ty * self.width + tx] = key
+                        self._write(tx, ty, key)
         return self
 
     def crop(self, x0, y0, x1, y1) -> "Canvas":
@@ -262,7 +264,7 @@ class Canvas:
                 for bx in range(block.width):
                     tx = x + bx
                     if 0 <= tx < self.width:
-                        self._cells[ty * self.width + tx] = block._cells[by * block.width + bx]
+                        self._write(tx, ty, block._cells[by * block.width + bx])
         return self
 
     def flip(self, x0, y0, x1, y1, *, axis: str = "x") -> "Canvas":
@@ -278,12 +280,45 @@ class Canvas:
                 out._cells[by * out.width + bx] = block._cells[sby * block.width + sbx]
         return self.stamp(out, x0, y0)
 
+    # -- the mask ---------------------------------------------------------- #
+    #
+    # **A mask is a drawing context, not a pixel operation.** It restricts where every later write lands,
+    # and it is deliberately not part of the history: `undo` steps back a drawing, and a mask is the
+    # condition the drawing was made under. A script that wants to return to an unmasked state says
+    # `unmask` explicitly, which is also the version a reader can see.
+    #
+    # `recolor` ignores it on purpose: that verb rewrites the pixels that are already there, and a region
+    # that was masked when they were drawn is not a reason to leave them un-recoloured.
+
+    def mask(self, x0, y0, x1, y1) -> "Canvas":
+        """Restrict every later write to this rectangle, inclusive.
+
+        The rectangle may leave the canvas; the parts outside it simply never receive a write.
+        """
+        if x1 < x0 or y1 < y0:
+            raise ValueError("an empty mask (%d,%d)-(%d,%d); give x1 >= x0 and y1 >= y0"
+                             % (x0, y0, x1, y1))
+        self._clip = (x0, y0, x1, y1)
+        return self
+
+    def unmask(self) -> "Canvas":
+        self._clip = None
+        return self
+
+    def _write(self, x: int, y: int, key: str):
+        """The only place a key reaches a cell. Everything drawing goes through here or through `put`."""
+        if self._clip is not None:
+            x0, y0, x1, y1 = self._clip
+            if not (x0 <= x <= x1 and y0 <= y <= y1):
+                return
+        self._cells[y * self.width + x] = key
+
     def put(self, x, y, key: str) -> "Canvas":
         # only a direct call is its own operation; inside `_shape` the caller already recorded one
         if not self._drawing:
             self._mark("put")
         if 0 <= x < self.width and 0 <= y < self.height:
-            self._cells[y * self.width + x] = key
+            self._write(x, y, key)
         return self
 
     def rect(self, x0, y0, x1, y1, key: str) -> "Canvas":

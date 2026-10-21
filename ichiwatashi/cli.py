@@ -312,6 +312,18 @@ def plan_steps(spec):
             plan.append(("flip", _with_layer(layer, {
                 "x0": step["x0"], "y0": step["y0"], "x1": step["x1"], "y1": step["y1"], "axis": axis})))
             continue
+        if kind in ("mask", "unmask"):
+            if kind == "unmask":
+                plan.append(("unmask", _with_layer(layer, {})))
+                continue
+            for field in ("x0", "y0", "x1", "y1"):
+                if field not in step:
+                    raise SpecError("step %d (mask): missing %s" % (i, field))
+            if step["x1"] < step["x0"] or step["y1"] < step["y0"]:
+                raise SpecError("step %d (mask): give x1 >= x0 and y1 >= y0" % i)
+            plan.append(("mask", _with_layer(layer, {
+                "x0": step["x0"], "y0": step["y0"], "x1": step["x1"], "y1": step["y1"]})))
+            continue
         if kind not in SHAPE_ARGS:
             raise SpecError("step %d: unknown op %r (known: %s, outline, %s)"
                             % (i, kind, ", ".join(sorted(SHAPE_ARGS)), ", ".join(HISTORY_OPS)))
@@ -393,6 +405,12 @@ def apply_plan(canvas, plan, *, base_dir=None, _depth=0):
         if kind == "flip":
             # `flip` stamps including the background, because the empties inside the rectangle moved too.
             canvas.flip(step["x0"], step["y0"], step["x1"], step["y1"], axis=step["axis"])
+            continue
+        if kind == "mask":
+            canvas.mask(step["x0"], step["y0"], step["x1"], step["y1"])
+            continue
+        if kind == "unmask":
+            canvas.unmask()
             continue
         kwargs = {k: step[k] for k in SHAPE_ARGS[kind]}
         kwargs["key"] = step["key"]

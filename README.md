@@ -659,6 +659,23 @@ that, `blit` (adds) against `stamp` (moves).
 A rectangle that leaves the canvas keeps its requested size, with the outside filled as background, so a
 block read at one offset and written at another still lines up.
 
+**A mask.** Two steps restrict where later writes land:
+
+```json
+{"op": "mask", "x0": 0, "y0": 0, "x1": 31, "y1": 23}
+{"op": "unmask"}
+```
+
+Every write obeys it — shapes, `outline`, `blit`, `stamp`, `mirror` — because they all reach the grid
+through one function. That is the property the tests enumerate rather than assume: a mask honoured by
+`put` and not by `blit` looks correct in the simplest case and leaks everywhere else.
+
+`recolor` ignores it on purpose. That verb rewrites the pixels that are already there, and the region
+they were drawn under is not a reason to leave them un-recoloured.
+
+A mask is **not a history entry**. It is the condition a drawing was made under, not a drawing; a script
+that wants to be unmasked again says `unmask`, which is also the version a reader can see.
+
 ### Frames
 
 ```bash
