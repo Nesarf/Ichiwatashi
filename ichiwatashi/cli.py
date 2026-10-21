@@ -212,6 +212,15 @@ class SpecError(Exception):
     """A problem with the shape script itself, named by step."""
 
 
+def _with_layer(layer, body):
+    """Attach the current layer to a plan entry, when the script declares layers at all."""
+    if layer is None:
+        return body
+    body = dict(body)
+    body["layer"] = layer
+    return body
+
+
 def plan_steps(spec):
     """Validate a shape script and return [(op, kwargs)] without drawing anything.
 
@@ -227,21 +236,34 @@ def plan_steps(spec):
         raise SpecError("spec: 'width' and 'height' are required")
     if not isinstance(spec.get("steps"), list):
         raise SpecError("spec: 'steps' must be a list")
+    # **Layers are declared once and named per step.** Declared rather than inferred from the steps, so a
+    # typo is an error at the top of the file instead of a silently new pass at the bottom.
+    # **`layers` present but empty is an error, not a fallback.** A script that declares no passes and one
+    # that declares an empty list are different intentions, and only one of them is a mistake.
+    names = spec["layers"] if "layers" in spec else ["base"]
+    if not isinstance(names, list) or not names or any(not isinstance(n, str) or not n for n in names):
+        raise SpecError("spec: 'layers' must be a non-empty list of names")
+    if len(set(names)) != len(names):
+        raise SpecError("spec: 'layers' declares a duplicate name")
     plan = []
     for i, step in enumerate(spec["steps"]):
         if not isinstance(step, dict):
             raise SpecError("step %d: not an object" % i)
         kind = step.get("op")
+        layer = step.get("layer")
+        if layer is not None and layer not in names:
+            raise SpecError("step %d: unknown layer %r (declared: %s)"
+                            % (i, layer, ", ".join(names)))
         if kind in HISTORY_OPS:
             count = step.get("count", 1)
             if not isinstance(count, int) or count < 1:
                 raise SpecError("step %d (%s): count must be a positive integer" % (i, kind))
-            plan.append((kind, {"count": count}))
+            plan.append((kind, _with_layer(layer, {"count": count})))
             continue
         if kind == "outline":
             if "key" not in step:
                 raise SpecError("step %d (outline): missing key" % i)
-            plan.append(("outline", dict(step)))
+            plan.append(("outline", _with_layer(layer, dict(step))))
             continue
         if kind == "mirror":
             # `axis` is a column index and has to be an integer: a fractional axis would put the mirror
@@ -252,7 +274,7 @@ def plan_steps(spec):
             direction = step.get("direction", "left")
             if direction not in ("left", "right", "both"):
                 raise SpecError("step %d (mirror): 'direction' must be left, right or both" % i)
-            plan.append(("mirror", {"axis": axis, "direction": direction}))
+            plan.append(("mirror", _with_layer(layer, {"axis": axis, "direction": direction})))
             continue
         if kind == "part":
             # A part is another shape script, placed whole. `file` is resolved against the script that
@@ -263,7 +285,7 @@ def plan_steps(spec):
             flip = step.get("flip", False)
             if not isinstance(flip, bool):
                 raise SpecError("step %d (part): 'flip' must be true or false" % i)
-            plan.append(("part", {"file": step["file"], "x": step["x"], "y": step["y"], "flip": flip}))
+            plan.append(("part", _with_layer(layer, {"file": step["file"], "x": step["x"], "y": step["y"], "flip": flip})))
             continue
         if kind not in SHAPE_ARGS:
             raise SpecError("step %d: unknown op %r (known: %s, outline, %s)"
@@ -273,7 +295,7 @@ def plan_steps(spec):
             raise SpecError("step %d (%s): missing %s" % (i, kind, ", ".join(missing)))
         if "key" not in step:
             raise SpecError("step %d (%s): missing key" % (i, kind))
-        plan.append((kind, dict(step)))
+        plan.append((kind, _with_layer(layer, dict(step))))
     return plan
 
 
@@ -300,6 +322,12 @@ def apply_plan(canvas, plan, *, base_dir=None, _depth=0):
                 redone += hits
             continue
         applied += 1
+        wanted = step.get("layer")
+        if wanted is not None:
+            use = getattr(canvas, "use", None)
+            if use is None:
+                raise SpecError("step names layer %r but this canvas has no layers" % wanted)
+            use(wanted)
         if kind == "outline":
             canvas.outline(step["key"], diagonal=step.get("diagonal", False))
             continue
@@ -391,28 +419,41 @@ def cmd_font(a):
 
 def cmd_build(a):
     from . import builder as B
+    from . import layers as L
 
     spec = json.loads(Path(a.script).read_text(encoding="utf-8"))
-    canvas = B.Canvas(spec["width"], spec["height"])
-    applied, undone, redone = apply_plan(canvas, plan_steps(spec), base_dir=Path(a.script).parent)
+    plan = plan_steps(spec)
+    canvas = L.Layers(spec["width"], spec["height"], spec.get("layers"))
+    applied, undone, redone = apply_plan(canvas, plan, base_dir=Path(a.script).parent)
     out = Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    canvas.to_image(spec["palette"]).save(out)
+    # **`--hide` composes without a pass rather than deleting it.** The pass stays in the script and in the
+    # grid; what changes is the picture. That is the reason to have layers at all: the draft is the one a
+    # caller wants to keep in the file and out of the render.
+    hidden = tuple(a.hide or ())
+    composed = canvas.flatten(hide=hidden)
+    composed.to_image(spec["palette"]).save(out)
     print("wrote %s" % out)
+    if hidden:
+        print("  hid %d layer(s): %s" % (len(hidden), ", ".join(hidden)))
     if a.preview:
-        canvas.preview(scale=8, palette=spec["palette"]).convert("RGB").save(a.preview)
+        composed.preview(scale=8, palette=spec["palette"]).convert("RGB").save(a.preview)
         print("wrote %s (x8, for looking at)" % a.preview)
     # **A refused undo is reported rather than passed over.** Stepping back further than the history goes
     # is a mistake in the script, and a run that printed the same thing either way would let a reader
     # believe an edit had been rolled back when the canvas never moved.
     if undone or redone:
+        # History is per layer now, so the labels are flattened in stack order. Printing the pairs would
+        # show a reader `('ink', [...])`, which says nothing a person wants from a one-line summary.
+        recent = [label for _name, labels in canvas.history() for label in labels][-4:]
         print("history: %d step(s) applied, %d undone, %d redone -> %s"
-              % (applied, undone, redone, ", ".join(canvas.history()[-4:])))
+              % (applied, undone, redone, ", ".join(recent)))
         wanted = sum(st["count"] for k, st in plan_steps(spec) if k == "undo")
         if undone < wanted:
             print("  NOTE: %d of %d undo step(s) did nothing -- the history is shorter than the script "
                   "assumes" % (wanted - undone, wanted))
-    rows = canvas.rows()
+    # The composed drawing, not the current layer: the ragged-row guard is about what gets written.
+    rows = canvas.flatten().rows()
     bad = [(i, len(r)) for i, r in enumerate(rows) if len(r) != canvas.width]
     if bad:
         raise SystemExit("ragged rows: %s" % bad)
@@ -799,9 +840,10 @@ def cmd_grid(a):
     file that had been corrected by hand could not come back.
     """
     from . import builder as B
+    from . import layers as L
 
     spec = json.loads(Path(a.script).read_text(encoding="utf-8"))
-    canvas = B.Canvas(spec["width"], spec["height"], spec.get("bg", "."))
+    canvas = L.Layers(spec["width"], spec["height"], spec.get("layers"), spec.get("bg", "."))
     apply_plan(canvas, plan_steps(spec), base_dir=Path(a.script).parent)
     grid = canvas.to_grid(spec.get("palette") or {})
     out = Path(a.out)
@@ -855,6 +897,8 @@ def main(argv=None):
     b.add_argument("script")
     b.add_argument("--out", required=True)
     b.add_argument("--preview", help="also write a nearest-neighbour x8 image here")
+    b.add_argument("--hide", action="append", default=[], metavar="LAYER",
+                   help="omit a declared layer from the picture; it stays in the script")
     b.set_defaults(func=cmd_build)
 
     g = sub.add_parser("grid", help="write a shape script's canvas as an editable grid JSON")

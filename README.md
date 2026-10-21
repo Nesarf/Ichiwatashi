@@ -619,6 +619,28 @@ hanging off the edge is a normal way to draw a cropped figure.
 `flip: true` mirrors the part before placing it — a right hand is a flipped left hand more often than it
 is a second drawing.
 
+**Layers.** A drawing can be split into passes:
+
+```json
+{"width": 32, "height": 32, "layers": ["colour", "ink"],
+ "steps": [
+   {"op": "disc", "cx": 15, "cy": 16, "r": 11, "key": "w", "layer": "colour"},
+   {"op": "line", "x0": 12, "y0": 22, "x1": 18, "y1": 22, "key": "k", "layer": "ink"}
+ ]}
+```
+
+The order is the declaration order, bottom first, and the top pass wins where two of them drew. Each pass
+keeps **its own history**, so an `undo` steps back the pass it is aimed at rather than whatever was drawn
+last anywhere.
+
+`ichiwatashi build script.json --hide ink` composes without a pass. It stays in the script and leaves the
+picture — which is the whole reason to keep a draft layer: it is the one you want in the file and out of
+the render.
+
+**Not transparency, not opacity.** A pixel sprite lands on one colour; a stack that could fade would be
+exporting something the format cannot carry, so the composition rule is the simple one — a pass that drew
+nothing does not blank the pass underneath it.
+
 ### Frames
 
 ```bash
