@@ -1,6 +1,6 @@
 [project]
 name = "ichiwatashi"
-version = "0.3.1"
+version = "0.3.2"
 description = "Deterministic pixel-art measurement and parametric construction"
 readme = "README.md"
 requires-python = ">=3.9"
