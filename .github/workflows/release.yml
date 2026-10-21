@@ -76,6 +76,23 @@ jobs:
       - name: Build
         run: python -m build
 
+      - name: The sdist can run its own suite
+        # **The gate that was missing.** 0.1.0 shipped an sdist whose test directory held one file and no
+        # `__init__.py`, so `discover` could not start there at all, and whose version test imported
+        # `tomllib` -- absent on the 3.9 the metadata claims. Both were green in the checkout, because the
+        # checkout **is** the repository.
+        #
+        # `-t .` is kept: it is how the suite is run everywhere else here, and a gate that runs the tests
+        # differently from the way they are normally run is a second thing that can be wrong.
+        #
+        # `mktemp` rather than a fixed path: a directory left by an earlier run would let this pass on
+        # files that are no longer the ones in `dist/`.
+        run: |
+          tmp=$(mktemp -d)
+          tar -xzf dist/*.tar.gz -C "$tmp"
+          cd "$tmp"/*/
+          python -m unittest discover -s test -t .
+
       - name: Validate the distributions
         run: python -m twine check dist/*
 
