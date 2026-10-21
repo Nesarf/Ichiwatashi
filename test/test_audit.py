@@ -58,6 +58,15 @@ class TestEachHint(unittest.TestCase):
                         {"op": "outline", "key": "k"}])
         self.assertEqual(hints(s), [])
 
+    def test_a_drawing_made_only_of_parts_does_not_claim_its_palette_is_unused(self):
+        """A part draws with the host's keys from its own file, so this file cannot know what it used.
+
+        Reported on the first release of these hints: a drawing of two parts showed three unused entries
+        that the parts were using. A check that cannot see the usage must not report the absence.
+        """
+        s = spec(steps=[{"op": "part", "file": "body.json", "x": 0, "y": 0}])
+        self.assertEqual(hints(s), [])
+
     def test_shaded_but_not_outlined(self):
         s = spec(palette={"h": (1, 1, 1), "hl": (2, 2, 2), "hd": (3, 3, 3)},
                  steps=[{"op": "rect", "x0": 2, "y0": 2, "x1": 12, "y1": 12, "key": "h"},

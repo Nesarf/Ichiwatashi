@@ -54,10 +54,17 @@ def hints(spec, plan):
     #    **The background is not one of them.** It is a key the canvas fills itself with and no step ever
     #    names, so counting it reported every script as having an unused entry -- a hint that is always on
     #    is a hint nobody reads.
+    #
+    #    **And a script that places parts cannot answer this at all.** A part draws with the host's keys
+    #    from its own file, so a drawing made only of parts has no key of its own to count -- reported on
+    #    first release as three unused entries in a script that used all three through a part. A check that
+    #    cannot see the usage must not report the absence.
     bg = spec.get("bg", ".")
-    unused = sorted(k for k in keys if k not in used and k != bg)
-    if unused:
-        out.append("palette entries no step uses: %s" % ", ".join(repr(k) for k in unused))
+    has_parts = any(kind == "part" for kind, _step in plan)
+    if not has_parts:
+        unused = sorted(k for k in keys if k not in used and k != bg)
+        if unused:
+            out.append("palette entries no step uses: %s" % ", ".join(repr(k) for k in unused))
 
     # 2. Shaded but not outlined. The cost is stated rather than implied: at small sizes an unoutlined
     #    silhouette dissolves into whatever it sits on, which is why `outline` exists at all.
