@@ -152,6 +152,50 @@ class Canvas:
             return self._cells[y * self.width + x]
         return self.bg
 
+    def mirror(self, axis: int, *, direction: str = "left") -> "Canvas":
+        """Reflect one half of the canvas across column `axis` onto the other half.
+
+        **The axis is a column index, not the canvas centre, and on an even width those differ.** A
+        32-wide canvas has columns 0..31 and its geometric centre falls at 15.5, so `axis=15` and
+        `axis=16` produce drawings that are each internally symmetric and one pixel apart from each
+        other. The tool does not pick: which column is the spine is a drawing decision, and a silent
+        choice would make two correct sprites differ for a reason nobody wrote down.
+
+        `direction` names the half that is the **source**: `left` keeps `x <= axis` and writes the rest,
+        `right` the other way, `both` fills whichever side is empty. Only non-background pixels are
+        copied -- mirroring the background too would erase work already on the destination side, which
+        is the one way this operation could destroy something silently.
+
+        One history entry for the whole reflection, like every other primitive here.
+        """
+        if not isinstance(axis, int) or isinstance(axis, bool):
+            raise ValueError("axis must be an integer column, got %r" % (axis,))
+        if direction not in ("left", "right", "both"):
+            raise ValueError("direction must be left, right or both, got %r" % (direction,))
+        if not 0 <= axis < self.width:
+            raise ValueError("axis %d is outside the canvas (0..%d)" % (axis, self.width - 1))
+
+        with self._shape("mirror"):
+            for y in range(self.height):
+                for x in range(self.width):
+                    if direction == "left" and x > axis:
+                        continue
+                    if direction == "right" and x <= axis:
+                        continue
+                    key = self._cells[y * self.width + x]
+                    if key == self.bg:
+                        continue
+                    mx = 2 * axis - x
+                    if not 0 <= mx < self.width:
+                        continue
+                    # `both` completes whichever side is empty; it must not overwrite a side that has
+                    # already been drawn, or the result would depend on iteration order rather than on
+                    # what the caller asked for.
+                    if direction == "both" and self._cells[y * self.width + mx] != self.bg:
+                        continue
+                    self._cells[y * self.width + mx] = key
+        return self
+
     def put(self, x, y, key: str) -> "Canvas":
         # only a direct call is its own operation; inside `_shape` the caller already recorded one
         if not self._drawing:

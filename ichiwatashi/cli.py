@@ -243,6 +243,17 @@ def plan_steps(spec):
                 raise SpecError("step %d (outline): missing key" % i)
             plan.append(("outline", dict(step)))
             continue
+        if kind == "mirror":
+            # `axis` is a column index and has to be an integer: a fractional axis would put the mirror
+            # line between pixels, and the two sides would then differ by a subpixel nobody can see.
+            axis = step.get("axis")
+            if not isinstance(axis, int) or isinstance(axis, bool):
+                raise SpecError("step %d (mirror): 'axis' must be an integer column" % i)
+            direction = step.get("direction", "left")
+            if direction not in ("left", "right", "both"):
+                raise SpecError("step %d (mirror): 'direction' must be left, right or both" % i)
+            plan.append(("mirror", {"axis": axis, "direction": direction}))
+            continue
         if kind not in SHAPE_ARGS:
             raise SpecError("step %d: unknown op %r (known: %s, outline, %s)"
                             % (i, kind, ", ".join(sorted(SHAPE_ARGS)), ", ".join(HISTORY_OPS)))
@@ -253,6 +264,43 @@ def plan_steps(spec):
             raise SpecError("step %d (%s): missing key" % (i, kind))
         plan.append((kind, dict(step)))
     return plan
+
+
+def apply_plan(canvas, plan):
+    """Draw a validated plan onto a canvas. Returns `(applied, undone, redone)`.
+
+    **One implementation, two callers.** `build` draws the script onto a canvas and `grid` draws the same
+    script onto one to export an editable grid; the two had the same loop written twice, and adding an op
+    to one of them would have left the other rejecting a script it had just accepted (the validator is
+    shared, the loop was not).
+    """
+    applied = undone = redone = 0
+    for kind, step in plan:
+        if kind in HISTORY_OPS:
+            hits = sum(1 for _ in range(step["count"]) if getattr(canvas, kind)())
+            if kind == "undo":
+                undone += hits
+            else:
+                redone += hits
+            continue
+        applied += 1
+        if kind == "outline":
+            canvas.outline(step["key"], diagonal=step.get("diagonal", False))
+            continue
+        if kind == "mirror":
+            canvas.mirror(step["axis"], direction=step["direction"])
+            continue
+        # **Keyword arguments, because the two call shapes disagree about where `cx` goes.**
+        # `trap(y0, y1, w0, w1, key, cx=None)` and `cone` put `key` before `cx`, while `rect` has no `cx`
+        # at all -- the version this replaces appended `cx` before `key`, so a script that *did* pass `cx`
+        # bound that number to `key` and then `_taper` divided a string by two. No script in the suite
+        # used `cx` until the mirrored demo did, which is how a latent defect survives a green suite.
+        kwargs = {k: step[k] for k in SHAPE_ARGS[kind]}
+        kwargs["key"] = step["key"]
+        if kind in ("trap", "cone") and "cx" in step:
+            kwargs["cx"] = step["cx"]
+        getattr(canvas, kind)(**kwargs)
+    return applied, undone, redone
 
 
 def cmd_font(a):
@@ -310,26 +358,7 @@ def cmd_build(a):
 
     spec = json.loads(Path(a.script).read_text(encoding="utf-8"))
     canvas = B.Canvas(spec["width"], spec["height"])
-    applied, undone, redone = 0, 0, 0
-    for kind, step in plan_steps(spec):
-        if kind in HISTORY_OPS:
-            hits = sum(1 for _ in range(step["count"]) if getattr(canvas, kind)())
-            if kind == "undo":
-                undone += hits
-            else:
-                redone += hits
-            continue
-        applied += 1
-        if kind == "outline":
-            canvas.outline(step["key"], diagonal=step.get("diagonal", False))
-            continue
-        # `rect`/`line`/`disc`/`trap`/`cone` are the Canvas methods; `getattr` rather than a dict of
-        # bound methods because the canvas is created per call and the names are already validated.
-        args = [step[k] for k in SHAPE_ARGS[kind]]
-        if kind in ("trap", "cone") and "cx" in step:
-            args.append(step["cx"])
-        args.append(step["key"])
-        getattr(canvas, kind)(*args)
+    applied, undone, redone = apply_plan(canvas, plan_steps(spec))
     out = Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     canvas.to_image(spec["palette"]).save(out)
@@ -737,19 +766,7 @@ def cmd_grid(a):
 
     spec = json.loads(Path(a.script).read_text(encoding="utf-8"))
     canvas = B.Canvas(spec["width"], spec["height"], spec.get("bg", "."))
-    for kind, step in plan_steps(spec):
-        if kind in HISTORY_OPS:
-            for _ in range(step["count"]):
-                getattr(canvas, kind)()
-            continue
-        if kind == "outline":
-            canvas.outline(step["key"], diagonal=step.get("diagonal", False))
-            continue
-        args = [step[k] for k in SHAPE_ARGS[kind]]
-        if kind in ("trap", "cone") and "cx" in step:
-            args.append(step["cx"])
-        args.append(step["key"])
-        getattr(canvas, kind)(*args)
+    apply_plan(canvas, plan_steps(spec))
     grid = canvas.to_grid(spec.get("palette") or {})
     out = Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)

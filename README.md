@@ -578,6 +578,25 @@ author who cannot yet do that will not, and this gets them to something that com
 **The outline pass is not decoration.** Without it a silhouette dissolves into the background at small
 sizes. It is automatic here for the same reason it exists: it is a rule, not a decision.
 
+**Reflecting one half onto the other.** A step in the same script:
+
+```json
+{"op": "mirror", "axis": 15, "direction": "left"}
+```
+
+`mirror` reflects the half named by `direction` onto the other. **The axis is a column index, not the
+canvas centre, and on an even width those are not the same place**: a 32-wide canvas has columns 0..31
+and its geometric centre falls at 15.5, so `axis=15` and `axis=16` produce two drawings that are each
+internally symmetric and one pixel apart. Which column is the spine is a drawing decision, and a tool
+that picked one silently would make two correct sprites differ for a reason nobody wrote down.
+
+Only non-background pixels are copied. Mirroring the background as well would erase whatever had already
+been drawn on the destination side — the one way this operation could destroy work without saying so.
+`direction: "both"` completes whichever side is empty and leaves a side that is already drawn alone.
+
+`trap` and `cone` also take `cx`, which is the centre the taper is built around: leave it out and the
+shape centres on the canvas, pass it and the shape centres where the script says.
+
 ### Frames
 
 ```bash
