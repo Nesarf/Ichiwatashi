@@ -597,6 +597,28 @@ been drawn on the destination side — the one way this operation could destroy 
 `trap` and `cone` also take `cx`, which is the centre the taper is built around: leave it out and the
 shape centres on the canvas, pass it and the shape centres where the script says.
 
+**Parts.** A part is another shape script, placed whole:
+
+```json
+{"op": "part", "file": "parts/body.json", "x": 0, "y": 0}
+```
+
+`file` resolves against the script that names it, so a folder of parts and the drawing that uses them
+move together. This is what makes one body carry several expressions instead of four drawings that drift
+apart.
+
+**One level deep, deliberately.** A part may not place a part: that is a graph, a graph can be cyclic,
+and the case this exists for — one body, a few faces — is one level. Refusing is a smaller promise than
+a resolver with a cycle detector, and the smaller promise is the one that can be kept.
+
+Keys are the host's, not the part's: a part is drawn with the same palette entries as the canvas it lands
+on, and a part naming an entry the host lacks fails at render, where the colour is looked up, rather than
+drawing nothing quietly. Pixels that fall outside the canvas are clipped, because a part deliberately
+hanging off the edge is a normal way to draw a cropped figure.
+
+`flip: true` mirrors the part before placing it — a right hand is a flipped left hand more often than it
+is a second drawing.
+
 ### Frames
 
 ```bash

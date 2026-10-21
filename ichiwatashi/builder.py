@@ -196,6 +196,37 @@ class Canvas:
                     self._cells[y * self.width + mx] = key
         return self
 
+    def blit(self, other, x: int, y: int, *, flip: bool = False) -> "Canvas":
+        """Place another canvas at `(x, y)`, copying only its non-background pixels.
+
+        This is what makes a part a part: ahead of it, every drawing had to be one script on one canvas,
+        so a body and its three expressions were four independent drawings that could drift apart.
+        **Keys are the caller's, not the part's** -- a part is drawn with the same palette entries as the
+        canvas it lands on, and a part that names an entry the canvas does not have fails at render,
+        where the colour is actually looked up, rather than silently drawing nothing here.
+
+        `flip` mirrors the part horizontally before placing it, which is the second half of why this
+        exists: a right hand is a flipped left hand far more often than it is a second drawing.
+
+        Pixels that land outside the canvas are clipped, not refused -- a part deliberately hanging off
+        the edge is a normal way to draw a cropped figure, and a refusal there would be an obstacle
+        rather than a guard.
+        """
+        with self._shape("blit"):
+            for py in range(other.height):
+                ty = y + py
+                if not 0 <= ty < self.height:
+                    continue
+                for px in range(other.width):
+                    sx = other.width - 1 - px if flip else px
+                    key = other._cells[py * other.width + sx]
+                    if key == other.bg:
+                        continue
+                    tx = x + px
+                    if 0 <= tx < self.width:
+                        self._cells[ty * self.width + tx] = key
+        return self
+
     def put(self, x, y, key: str) -> "Canvas":
         # only a direct call is its own operation; inside `_shape` the caller already recorded one
         if not self._drawing:

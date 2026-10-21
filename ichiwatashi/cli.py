@@ -254,6 +254,17 @@ def plan_steps(spec):
                 raise SpecError("step %d (mirror): 'direction' must be left, right or both" % i)
             plan.append(("mirror", {"axis": axis, "direction": direction}))
             continue
+        if kind == "part":
+            # A part is another shape script, placed whole. `file` is resolved against the script that
+            # names it, so a library of parts travels with the drawing that uses them.
+            for field in ("file", "x", "y"):
+                if field not in step:
+                    raise SpecError("step %d (part): missing %s" % (i, field))
+            flip = step.get("flip", False)
+            if not isinstance(flip, bool):
+                raise SpecError("step %d (part): 'flip' must be true or false" % i)
+            plan.append(("part", {"file": step["file"], "x": step["x"], "y": step["y"], "flip": flip}))
+            continue
         if kind not in SHAPE_ARGS:
             raise SpecError("step %d: unknown op %r (known: %s, outline, %s)"
                             % (i, kind, ", ".join(sorted(SHAPE_ARGS)), ", ".join(HISTORY_OPS)))
@@ -266,14 +277,19 @@ def plan_steps(spec):
     return plan
 
 
-def apply_plan(canvas, plan):
+def apply_plan(canvas, plan, *, base_dir=None, _depth=0):
     """Draw a validated plan onto a canvas. Returns `(applied, undone, redone)`.
 
     **One implementation, two callers.** `build` draws the script onto a canvas and `grid` draws the same
     script onto one to export an editable grid; the two had the same loop written twice, and adding an op
     to one of them would have left the other rejecting a script it had just accepted (the validator is
     shared, the loop was not).
+
+    `base_dir` is what a `part` step's relative `file` resolves against -- the directory of the script
+    that names it, so a folder of parts and the drawing that uses them move together.
     """
+    from . import builder as B
+
     applied = undone = redone = 0
     for kind, step in plan:
         if kind in HISTORY_OPS:
@@ -289,6 +305,26 @@ def apply_plan(canvas, plan):
             continue
         if kind == "mirror":
             canvas.mirror(step["axis"], direction=step["direction"])
+            continue
+        if kind == "part":
+            path = Path(step["file"])
+            if not path.is_absolute():
+                if base_dir is None:
+                    raise SpecError("part %r is relative and no base directory was given"
+                                    % step["file"])
+                path = Path(base_dir) / path
+            # **One level, and the refusal is the design.** A part that places a part is a graph, a graph
+            # can be cyclic, and the thing this exists for -- one body with several expressions -- is one
+            # level deep. Refusing is a smaller promise than a resolver with a cycle detector, and this
+            # project's rule is to make the smaller promise.
+            if _depth >= 1:
+                raise SpecError("part %s: a part may not place another part" % path.name)
+            if not path.is_file():
+                raise SpecError("part %s: no such file" % path)
+            sub = json.loads(path.read_text(encoding="utf-8"))
+            part = B.Canvas(sub["width"], sub["height"], sub.get("bg", "."))
+            apply_plan(part, plan_steps(sub), base_dir=path.parent, _depth=_depth + 1)
+            canvas.blit(part, step["x"], step["y"], flip=step["flip"])
             continue
         # **Keyword arguments, because the two call shapes disagree about where `cx` goes.**
         # `trap(y0, y1, w0, w1, key, cx=None)` and `cone` put `key` before `cx`, while `rect` has no `cx`
@@ -358,7 +394,7 @@ def cmd_build(a):
 
     spec = json.loads(Path(a.script).read_text(encoding="utf-8"))
     canvas = B.Canvas(spec["width"], spec["height"])
-    applied, undone, redone = apply_plan(canvas, plan_steps(spec))
+    applied, undone, redone = apply_plan(canvas, plan_steps(spec), base_dir=Path(a.script).parent)
     out = Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     canvas.to_image(spec["palette"]).save(out)
@@ -766,7 +802,7 @@ def cmd_grid(a):
 
     spec = json.loads(Path(a.script).read_text(encoding="utf-8"))
     canvas = B.Canvas(spec["width"], spec["height"], spec.get("bg", "."))
-    apply_plan(canvas, plan_steps(spec))
+    apply_plan(canvas, plan_steps(spec), base_dir=Path(a.script).parent)
     grid = canvas.to_grid(spec.get("palette") or {})
     out = Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)
