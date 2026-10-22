@@ -34,12 +34,21 @@ def _close(a, b, tolerance=BACKGROUND_TOLERANCE):
     return all(abs(int(x) - int(y)) <= tolerance for x, y in zip(a[:3], b[:3]))
 
 
-def sample(image, *, width=None, height=None):
+def sample(image, *, width=None, height=None, pick="mode"):
     """Downsample by majority colour per block, keeping transparency.
 
     `width` or `height` may be given; the other follows the aspect ratio. Both are integers: a fractional
     target would put block boundaries between pixels, which is the same mistake as a fractional upscale.
+
+    **`pick` decides what a block becomes, and the choice is what a face lives or dies on.** `mode` takes the
+    commonest colour, which keeps flat areas flat; an eyelash one pixel wide in a twelve-pixel block is not
+    common and disappears. `darkest` takes the darkest pixel of the block, so every line survives and the
+    drawing comes out heavier. `contrast` takes the pixel furthest from the block's own average, which keeps
+    both lines and highlights -- the closest of the three to what a person does by hand when shrinking a
+    drawing with a face in it.
     """
+    if pick not in ("mode", "darkest", "contrast"):
+        raise ValueError("pick must be 'mode', 'darkest' or 'contrast', got %r" % (pick,))
     if width is None and height is None:
         raise ValueError("give width or height")
     for name, value in (("width", width), ("height", height)):
@@ -78,11 +87,19 @@ def sample(image, *, width=None, height=None):
             if opaque * 2 < (x1 - x0) * (y1 - y0):
                 row.append((0, 0, 0, 0))          # the block is mostly empty: it stays empty
             else:
-                # Ties go to the colour that appeared first: a dict keeps insertion order, so `next` picks
-                # the earliest, which is deterministic for a given image and block order. A random tie-break
-                # would make two runs of the same input differ.
-                best_count = max(counts.values())
-                best = next(k for k in counts if counts[k] == best_count)
+                if pick == "darkest":
+                    best = min(counts, key=lambda c: (c[0] + c[1] + c[2], c))
+                elif pick == "contrast":
+                    n = sum(counts.values())
+                    avg = tuple(sum(c[i] * counts[c] for c in counts) / n for i in range(3))
+                    best = max(counts, key=lambda c: (sum((c[i] - avg[i]) ** 2 for i in range(3)),
+                                                     counts[c], c))
+                else:
+                    # Ties go to the colour that appeared first: a dict keeps insertion order, so `next`
+                    # picks the earliest, which is deterministic for a given image and block order. A
+                    # random tie-break would make two runs of the same input differ.
+                    best_count = max(counts.values())
+                    best = next(k for k in counts if counts[k] == best_count)
                 row.append(best + (255,))
         out.append(row)
 
@@ -245,7 +262,7 @@ def _edges(image, *, darken=0.55, min_area=24, floor=16, tolerance=24):
 
 
 def pixelate(image, *, width=None, height=None, colours=24, background="auto", outline=None, denoise=1,
-             edges=False, edge_darken=0.55, edge_min_area=24, edge_tolerance=24):
+             edges=False, edge_darken=0.55, edge_min_area=24, edge_tolerance=24, pick="mode"):
     """`sample` then `reduce_colours`, with an optional automatic background and an optional outline.
 
     `background="auto"` reads the border and, when more than half of it is one colour, treats that colour as
@@ -278,7 +295,7 @@ def pixelate(image, *, width=None, height=None, colours=24, background="auto", o
                     pixel = px[x, y]
                     if pixel[3] >= 128 and _close(pixel, ground):
                         px[x, y] = (0, 0, 0, 0)
-    small = sample(im, width=width, height=height)
+    small = sample(im, width=width, height=height, pick=pick)
     # `colours=0` (or None) means **no cut at all**: the drawing is only downsampled and every colour the
     # majority vote produced survives. That is a different thing from a palette -- the drawing made smaller,
     # not the drawing made out of few colours.

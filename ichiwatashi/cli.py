@@ -570,7 +570,8 @@ def cmd_pixelate(a):
         out = PX.pixelate(im, width=a.width, height=a.height, colours=a.colours,
                           background=None if a.no_background else "auto", outline=a.outline,
                           denoise=a.denoise, edges=a.edges, edge_darken=a.edge_darken,
-                          edge_min_area=a.edge_min_area, edge_tolerance=a.edge_tolerance)
+                          edge_min_area=a.edge_min_area, edge_tolerance=a.edge_tolerance,
+                          pick=a.sample)
     except ValueError as exc:
         print("REFUSED: %s" % exc)
         return 2
@@ -1055,6 +1056,10 @@ def main(argv=None):
     px.add_argument("--out", required=True)
     px.add_argument("--width", type=int, help="target width in pixels; height follows the aspect ratio")
     px.add_argument("--height", type=int, help="target height in pixels; width follows the aspect ratio")
+    px.add_argument("--sample", choices=("mode", "darkest", "contrast"), default="mode",
+                    help="what a block of pixels becomes: the commonest colour (mode), the darkest "
+                         "pixel (keeps every line), or the one furthest from the block's average "
+                         "(keeps lines and highlights). A face survives contrast and dies on mode")
     px.add_argument("--colours", type=int, default=24,
                     help="cut the palette to at most this many colours; 0 keeps every colour the "
                          "downsample produced (default 24, the reference median is 26)")
