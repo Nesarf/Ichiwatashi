@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -153,6 +154,24 @@ class TestTheHeadBias(unittest.TestCase):
     def test_a_non_positive_bias_is_refused(self):
         with self.assertRaises(ValueError):
             PX.sample(canvas(10, 10), width=5, head_bias=0)
+
+
+class TestTheDisabledFlag(unittest.TestCase):
+    """`--edges` is off at the command line. The library keeps it; the refusal says why."""
+
+    def test_the_command_line_refuses_it(self):
+        from ichiwatashi import cli
+        with tempfile.TemporaryDirectory() as d:
+            src = Path(d) / "in.png"
+            canvas(8, 8, (10, 120, 40, 255)).save(src)
+            args = type("A", (), {
+                "image": str(src), "out": str(Path(d) / "out.png"), "width": 8, "height": None,
+                "colours": 8, "no_background": False, "outline": None, "denoise": 0,
+                "edges": True, "edge_darken": 0.55, "edge_min_area": 24, "edge_tolerance": 24,
+                "sample": "mode", "head_bias": 1.0, "preview": None, "preview_out": None,
+            })()
+            self.assertEqual(cli.cmd_pixelate(args), 2)
+            self.assertFalse((Path(d) / "out.png").exists(), "a refused run must not write a file")
 
 
 if __name__ == "__main__":

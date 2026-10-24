@@ -565,11 +565,23 @@ def cmd_pixelate(a):
     from PIL import Image
     from . import pixelate as PX
 
+    # **`--edges` is disabled, and the flag stays so the refusal can explain itself.** Measured on two
+    # illustrations at 320 and 160 wide: it delineated the areas but produced stripes along every gradient,
+    # and at the gentler darkening the stripes turned into a mesh. `edge_tolerance` removed the worst of it
+    # and the picture was still worse than the same drawing without edges. The implementation and its tests
+    # stay in `pixelate.py` -- this is a judgement about the result, not a defect to delete before someone
+    # finds the case it was for.
+    if a.edges:
+        print("REFUSED: --edges is disabled for now. On the two illustrations it was tried against it drew "
+              "stripes along the gradients, and the result was worse than the same drawing without it. The "
+              "implementation is still in the library for the case where it belongs")
+        return 2
+
     im = Image.open(a.image)
     try:
         out = PX.pixelate(im, width=a.width, height=a.height, colours=a.colours,
                           background=None if a.no_background else "auto", outline=a.outline,
-                          denoise=a.denoise, edges=a.edges, edge_darken=a.edge_darken,
+                          denoise=a.denoise, edges=False, edge_darken=a.edge_darken,
                           edge_min_area=a.edge_min_area, edge_tolerance=a.edge_tolerance,
                           pick=a.sample, head_bias=a.head_bias)
     except ValueError as exc:
