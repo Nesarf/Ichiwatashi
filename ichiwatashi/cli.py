@@ -571,7 +571,7 @@ def cmd_pixelate(a):
                           background=None if a.no_background else "auto", outline=a.outline,
                           denoise=a.denoise, edges=a.edges, edge_darken=a.edge_darken,
                           edge_min_area=a.edge_min_area, edge_tolerance=a.edge_tolerance,
-                          pick=a.sample)
+                          pick=a.sample, head_bias=a.head_bias)
     except ValueError as exc:
         print("REFUSED: %s" % exc)
         return 2
@@ -1056,6 +1056,10 @@ def main(argv=None):
     px.add_argument("--out", required=True)
     px.add_argument("--width", type=int, help="target width in pixels; height follows the aspect ratio")
     px.add_argument("--height", type=int, help="target height in pixels; width follows the aspect ratio")
+    px.add_argument("--head-bias", type=float, default=1.0, metavar="EXPONENT",
+                    help="give the top of the drawing more rows than its proportion (1.0 = unchanged, "
+                         "1.2 = the head takes a fifth of the figure's height from below). A pixel "
+                         "character is drawn with a head larger than life so the face has pixels")
     px.add_argument("--sample", choices=("mode", "darkest", "contrast"), default="mode",
                     help="what a block of pixels becomes: the commonest colour (mode), the darkest "
                          "pixel (keeps every line), or the one furthest from the block's average "

@@ -24,7 +24,7 @@ from . import window as W
 from .frames import Frame, Timeline, GifWouldLose, even_durations, with_hold, read_delays
 from .palette import sample, saturate, separation, best_accents
 
-__version__ = "0.3.2"
+__version__ = "0.4.0"
 
 __all__ = ["Report", "judge", "Canvas", "from_rows", "Frame", "Timeline", "GifWouldLose", "read_delays",
            "even_durations", "with_hold", "sample", "saturate", "separation",

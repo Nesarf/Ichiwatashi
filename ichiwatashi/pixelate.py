@@ -34,7 +34,7 @@ def _close(a, b, tolerance=BACKGROUND_TOLERANCE):
     return all(abs(int(x) - int(y)) <= tolerance for x, y in zip(a[:3], b[:3]))
 
 
-def sample(image, *, width=None, height=None, pick="mode"):
+def sample(image, *, width=None, height=None, pick="mode", head_bias=1.0):
     """Downsample by majority colour per block, keeping transparency.
 
     `width` or `height` may be given; the other follows the aspect ratio. Both are integers: a fractional
@@ -46,9 +46,18 @@ def sample(image, *, width=None, height=None, pick="mode"):
     drawing comes out heavier. `contrast` takes the pixel furthest from the block's own average, which keeps
     both lines and highlights -- the closest of the three to what a person does by hand when shrinking a
     drawing with a face in it.
+
+    **`head_bias` gives the top of the drawing more rows than its proportion.** A pixel character is drawn
+    with a head larger than life, because a face needs pixels to be a face; a photograph shrunk mechanically
+    keeps the photograph's proportions and the face arrives with three pixels for eyes. Above 1.0 the row
+    mapping is `t ** head_bias`, which stretches the upper part of the image: 1.2 takes a fifth of the figure's
+    body height away from the legs and gives it to the head. It is a proportional change, so it can make a
+    drawing look top-heavy -- the value is a judgement about the drawing, not a default to leave alone.
     """
     if pick not in ("mode", "darkest", "contrast"):
         raise ValueError("pick must be 'mode', 'darkest' or 'contrast', got %r" % (pick,))
+    if head_bias <= 0:
+        raise ValueError("head_bias must be positive, got %r" % (head_bias,))
     if width is None and height is None:
         raise ValueError("give width or height")
     for name, value in (("width", width), ("height", height)):
@@ -68,8 +77,12 @@ def sample(image, *, width=None, height=None, pick="mode"):
     px = im.load()
     out = []
     for ty in range(height):
-        y0 = ty * h // height
-        y1 = max(y0 + 1, (ty + 1) * h // height)
+        if head_bias == 1.0:
+            y0 = ty * h // height
+            y1 = max(y0 + 1, (ty + 1) * h // height)
+        else:
+            y0 = int(h * (ty / height) ** head_bias)
+            y1 = max(y0 + 1, int(h * ((ty + 1) / height) ** head_bias))
         row = []
         for tx in range(width):
             x0 = tx * w // width
@@ -262,7 +275,8 @@ def _edges(image, *, darken=0.55, min_area=24, floor=16, tolerance=24):
 
 
 def pixelate(image, *, width=None, height=None, colours=24, background="auto", outline=None, denoise=1,
-             edges=False, edge_darken=0.55, edge_min_area=24, edge_tolerance=24, pick="mode"):
+             edges=False, edge_darken=0.55, edge_min_area=24, edge_tolerance=24, pick="mode",
+             head_bias=1.0):
     """`sample` then `reduce_colours`, with an optional automatic background and an optional outline.
 
     `background="auto"` reads the border and, when more than half of it is one colour, treats that colour as
@@ -295,7 +309,7 @@ def pixelate(image, *, width=None, height=None, colours=24, background="auto", o
                     pixel = px[x, y]
                     if pixel[3] >= 128 and _close(pixel, ground):
                         px[x, y] = (0, 0, 0, 0)
-    small = sample(im, width=width, height=height, pick=pick)
+    small = sample(im, width=width, height=height, pick=pick, head_bias=head_bias)
     # `colours=0` (or None) means **no cut at all**: the drawing is only downsampled and every colour the
     # majority vote produced survives. That is a different thing from a palette -- the drawing made smaller,
     # not the drawing made out of few colours.

@@ -128,5 +128,32 @@ class TestTheEdge(unittest.TestCase):
                                 % (sorted(blocks(out)),))
 
 
+class TestTheHeadBias(unittest.TestCase):
+    """Giving the top of the drawing more rows than its proportion, so a face has pixels to live in."""
+
+    def test_one_is_the_identity(self):
+        im = canvas(40, 20, (10, 120, 40, 255))
+        plain = PX.sample(im, width=20)
+        same = PX.sample(im, width=20, head_bias=1.0)
+        self.assertEqual(same.tobytes(), plain.tobytes())
+
+    def test_above_one_reads_further_up_the_source_in_the_middle(self):
+        """Half way down the output must come from above half way down the source: that is what stretches
+        the head. A vertical gradient makes the difference a number instead of an impression."""
+        im = canvas(20, 40)
+        px = im.load()
+        for y in range(40):
+            for x in range(20):
+                shade = 255 - y * 6
+                px[x, y] = (shade, shade, shade, 255)
+        plain = PX.sample(im, width=20, height=20, head_bias=1.0)
+        biased = PX.sample(im, width=20, height=20, head_bias=1.3)
+        self.assertGreater(biased.getpixel((0, 10))[0], plain.getpixel((0, 10))[0])
+
+    def test_a_non_positive_bias_is_refused(self):
+        with self.assertRaises(ValueError):
+            PX.sample(canvas(10, 10), width=5, head_bias=0)
+
+
 if __name__ == "__main__":
     unittest.main()
