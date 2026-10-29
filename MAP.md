@@ -78,3 +78,16 @@ ichiwatashi panel / frames / window / ...
 ## 发布
 
 `pyproject.toml` 定义包；tag 触发 `.github/workflows/release.yml`，Trusted Publishing 到 PyPI，GitHub release 带发布记录。sdist 发布前解包并自跑测试。
+
+## 规模（测量值）
+
+```
+文件 93 · 代码行 19805 · 依赖边 23 · 测试文件 13 · 外部引用 45
+被最多模块引用的：ichiwatashi/__init__.py (23)
+```
+
+二十三条边全部指向包入口，内部模块之间几乎不互相引用 —— 平铺结构。代价是任何跨模块的约定都落在入口上，
+所以改入口之前先看谁在引用它。
+
+数字来自 `library_project op=map`（mega-index-map）对目录的静态清点。它数得出规模与依赖边，数不出职责与边界：
+前者在这一节，后者在上面的正文里。
