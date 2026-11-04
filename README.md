@@ -715,6 +715,30 @@ The split between a part and a drawing is the one the format already makes: **a 
 a part does not.** A part nothing names is reported as unused rather than failed — a part kept for a
 drawing not written yet is a normal way to work — while a drawing naming a part that is not there exits 1.
 
+### Pixelate
+
+`pixelate` turns a drawing into a smaller drawing — a starting point for `grid`, not a finished sprite.
+
+```bash
+ichiwatashi pixelate illustration.png --out out.png --width 320 --colours 0 \
+  --sample contrast --head-bias 1.18 --outline "#232735" --preview 2
+```
+
+**Sampling is a majority vote, not an average**, so no colour is invented. `--colours 0` keeps every colour
+the downsample produced; a number cuts the palette instead, which is the separate decision that makes it a
+pixel drawing rather than a small one.
+
+`--sample` decides what a block becomes, and it is where a face survives or does not: `mode` takes the
+commonest colour and keeps flat areas flat, while an eyelash one pixel wide in a twelve-pixel block is not
+common and disappears; `contrast` takes the pixel furthest from the block's own average and keeps lines and
+highlights both. `--head-bias` gives the top of the drawing more rows than its proportion — a pixel character
+is drawn with a head larger than life, and a mechanically shrunk illustration arrives with three pixels for
+eyes.
+
+`--edges` is refused at the command line: on the illustrations it was tried against it drew stripes along the
+gradients. The implementation and its tests stay in the library, for the case where the drawing is flat colour
+blocks and the rim is what it wants.
+
 ### Frames
 
 ```bash
