@@ -17,7 +17,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        # macOS was dropped on 2026-11-04 after its jobs were cancelled three runs in a row while
+        # ubuntu and windows finished: GitHub's macOS runners were the bottleneck, and a platform that
+        # never gets scheduled reports failure without testing anything. Two platforms that run and
+        # report honestly are worth more than three where one is a coin flip. The matrix is two lists,
+        # so putting it back is one word.
+        os: [ubuntu-latest, windows-latest]
         python: ["3.9", "3.12", "3.13"]
         exclude:
           # `ubuntu-latest` moved to Ubuntu 26.04, and actions/setup-python has no 3.9 build for it, so the job
